@@ -1,0 +1,25 @@
+{
+  "name": "pi-agents",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-ai": "*"
+  },
+  "devDependencies": {
+    "@mariozechner/pi-coding-agent": "^0.71.1",
+    "@mariozechner/pi-ai": "^0.71.1",
+    "typebox": "^0.34.0"
+  }
+}
