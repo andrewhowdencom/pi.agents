@@ -3,6 +3,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
+import { BorderedLoader } from "@mariozechner/pi-coding-agent";
 import type { AgentDefinition } from "./agent-discovery.js";
 import { discoverAgents, clearAgentCache } from "./agent-discovery.js";
 import { summarizeBranchForAgentSwitch } from "./summarize.js";
@@ -33,17 +34,58 @@ export default function (pi: ExtensionAPI) {
     ctx: ExtensionCommandContext,
   ) {
     try {
-      const sourceAgent = activeAgentName
-        ? (await discoverAgents(pi, ctx.cwd)).find((a) => a.name === activeAgentName)
-        : undefined;
+      if (ctx.hasUI) {
+        ctx.ui.notify(`Handing off to ${targetAgent.name}...`, "info");
+        ctx.ui.setStatus("handoff", `Summarizing for ${targetAgent.name}...`);
+      }
 
-      const branch = ctx.sessionManager.getBranch();
-      const summary = await summarizeBranchForAgentSwitch(
-        branch,
-        sourceAgent,
-        targetAgent,
-        ctx,
-      );
+      const summary = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
+        const loader = new BorderedLoader(
+          tui,
+          theme,
+          `Summarizing conversation for ${targetAgent.name}...`,
+        );
+        loader.onAbort = () => done(null);
+
+        (async () => {
+          try {
+            const sourceAgent = activeAgentName
+              ? (await discoverAgents(pi, ctx.cwd)).find((a) => a.name === activeAgentName)
+              : undefined;
+
+            const branch = ctx.sessionManager.getBranch();
+            const result = await summarizeBranchForAgentSwitch(
+              branch,
+              sourceAgent,
+              targetAgent,
+              ctx,
+              loader.signal,
+            );
+            done(result);
+          } catch (err) {
+            if (err instanceof Error && err.message === "Summarization cancelled") {
+              done(null);
+              return;
+            }
+            console.error("[pi-agents] Handoff failed:", err);
+            done(null);
+          }
+        })();
+
+        return loader;
+      });
+
+      if (summary === null) {
+        if (ctx.hasUI) {
+          ctx.ui.setStatus("handoff", undefined);
+          ctx.ui.notify("Agent switch cancelled", "info");
+        }
+        return;
+      }
+
+      if (ctx.hasUI) {
+        ctx.ui.setStatus("handoff", `Creating session for ${targetAgent.name}...`);
+      }
 
       const currentSessionFile = ctx.sessionManager.getSessionFile();
       const targetAgentName = targetAgent.name;
@@ -66,6 +108,7 @@ export default function (pi: ExtensionAPI) {
           });
         },
         withSession: async (replacementCtx) => {
+          replacementCtx.ui.setStatus("handoff", undefined);
           replacementCtx.ui.notify(
             `Handoff to ${targetAgentName} complete`,
             "info",
@@ -75,12 +118,14 @@ export default function (pi: ExtensionAPI) {
 
       if (newSessionResult.cancelled) {
         if (ctx.hasUI) {
+          ctx.ui.setStatus("handoff", undefined);
           ctx.ui.notify("Agent switch cancelled", "info");
         }
       }
     } catch (err) {
       console.error("[pi-agents] Handoff failed:", err);
       if (ctx.hasUI) {
+        ctx.ui.setStatus("handoff", undefined);
         ctx.ui.notify("Agent switch failed. Session unchanged.", "error");
       }
     }

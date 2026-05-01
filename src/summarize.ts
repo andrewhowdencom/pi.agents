@@ -89,6 +89,7 @@ export async function summarizeBranchForAgentSwitch(
   sourceAgent: AgentDefinition | undefined,
   targetAgent: AgentDefinition,
   ctx: ExtensionCommandContext,
+  signal?: AbortSignal,
 ): Promise<string> {
   const messages = getMessagesFromBranch(branch);
   const llmMessages = convertToLlm(messages);
@@ -138,17 +139,18 @@ export async function summarizeBranchForAgentSwitch(
   };
 
   try {
+    if (signal?.aborted) {
+      throw new Error("Summarization cancelled");
+    }
+
     const response = await complete(
       ctx.model,
       { systemPrompt: SYSTEM_PROMPT, messages: [userMessage] },
-      { apiKey: auth.apiKey, headers: auth.headers },
+      { apiKey: auth.apiKey, headers: auth.headers, signal },
     );
 
-    if (response.stopReason === "aborted") {
-      if (ctx.hasUI) {
-        ctx.ui.notify("Summarization cancelled; using naive summary", "warning");
-      }
-      return buildNaiveSummary(branch);
+    if (response.stopReason === "aborted" || signal?.aborted) {
+      throw new Error("Summarization cancelled");
     }
 
     const summary = response.content
@@ -158,6 +160,9 @@ export async function summarizeBranchForAgentSwitch(
 
     return summary || buildNaiveSummary(branch);
   } catch (err) {
+    if (err instanceof Error && err.message === "Summarization cancelled") {
+      throw err;
+    }
     console.error("[pi-agents] Summarization failed:", err);
     if (ctx.hasUI) {
       ctx.ui.notify("Summarization failed; using naive summary", "warning");

@@ -109,10 +109,16 @@ Run `/agent` with an agent name to select it directly:
 When an agent is already active and you select a different one, the extension
 performs a role-aware handoff:
 
-1. Summarizes the current conversation, tailored to the new agent's role
-2. Creates a new session file with the old session as `parentSession`
-3. Seeds the new session with only the summary and the new agent state
-4. Notifies you when the handoff is complete
+1. A loading overlay appears while the conversation is summarized for the new
+   agent's role. You can cancel the handoff at any time during this step by
+   pressing **Escape** or the loader's cancel action—this aborts the LLM call
+   and leaves your current session completely unchanged.
+2. The status bar cycles through phase indicators: **"Summarizing for
+   {agent}..."** → **"Creating session for {agent}..."** → cleared when the
+   handoff completes.
+3. Creates a new session file with the old session as `parentSession`
+4. Seeds the new session with only the summary and the new agent state
+5. Notifies you when the handoff is complete
 
 Example:
 
