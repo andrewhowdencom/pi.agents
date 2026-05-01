@@ -187,7 +187,7 @@ export default function (pi: ExtensionAPI) {
 
       if (agents.length === 0) {
         ctx.ui.notify(
-          "No agents found. Create .pi/prompts/agent-<name>.md files.",
+          "No agents found. Create .pi/agents/<name>.md files.",
           "warning",
         );
         return;
@@ -197,11 +197,7 @@ export default function (pi: ExtensionAPI) {
 
       if (args.trim()) {
         // Direct agent selection by name
-        let targetName = args.trim();
-        // Allow shorthand without the "agent-" prefix
-        if (!targetName.startsWith("agent-")) {
-          targetName = "agent-" + targetName;
-        }
+        const targetName = args.trim();
         selectedAgent = agents.find((a) => a.name === targetName);
         if (!selectedAgent) {
           ctx.ui.notify(`Agent "${args.trim()}" not found`, "error");

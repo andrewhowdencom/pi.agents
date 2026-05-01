@@ -40,18 +40,34 @@ npm install
 
 After installation, reload Pi with the `/reload` command to discover the extension.
 
-## Prompt Template Convention
+## Agent Directory Convention
 
-Agents are discovered from Pi's prompt template directories:
+Agents are discovered from dedicated agent directories:
 
-- `~/.pi/agent/prompts/*.md` (global prompts)
-- `.pi/prompts/*.md` (project-local prompts)
+- `~/.pi/agent/agents/*.md` (global agents, available in all projects)
+- `.pi/agents/*.md` (project-local agents)
 
-To mark a prompt template as an agent, name it with the `agent-` prefix:
+Files in these directories use their basename (without `.md`) as the agent name:
 
-- `agent-planner.md` → available as `/agent agent-planner`
-- `agent-builder.md` → available as `/agent agent-builder`
-- `agent-reviewer.md` → available as `/agent agent-reviewer`
+- `planner.md` → available as `/agent planner`
+- `builder.md` → available as `/agent builder`
+- `reviewer.md` → available as `/agent reviewer`
+
+### Backward Compatibility
+
+Existing `agent-*.md` files in the legacy prompt directories (`~/.pi/agent/prompts/`
+and `.pi/prompts/`) continue to be discovered. For these legacy files, the
+`agent-` prefix is automatically stripped, so `agent-planner.md` is available as
+`/agent planner`.
+
+If an agent exists in both a new `agents/` location and an old `prompts/`
+location with the same name, the new location takes precedence.
+
+To migrate an existing agent, simply move the file:
+
+```bash
+mv .pi/prompts/agent-planner.md .pi/agents/planner.md
+```
 
 ### Prompt Template Format
 
@@ -77,7 +93,7 @@ scalability, and maintainability.
 >
 > ```bash
 > # Using --system-prompt flag
-> pi --system-prompt ./.pi/prompts/agent-planner.md
+> pi --system-prompt ./.pi/agents/planner.md
 >
 > # Or place SYSTEM.md in your project root
 > pi
@@ -100,8 +116,8 @@ Select an agent from the list. The active agent name appears in the status bar.
 Run `/agent` with an agent name to select it directly:
 
 ```
-/agent planner        # shorthand, resolves to agent-planner
-/agent agent-planner  # full name
+/agent planner
+/agent builder
 ```
 
 ### Switching Agents (Role-Aware Handoff)
@@ -123,7 +139,7 @@ performs a role-aware handoff:
 Example:
 
 ```
-# Currently using agent-planner, switch to agent-builder
+# Currently using planner, switch to builder
 /agent builder
 ```
 
@@ -139,12 +155,12 @@ The active agent is persisted in the session file and restored when you:
 
 ### No Agents Found?
 
-If you run `/agent` and see "No agents found", create prompt templates in your
-project's `.pi/prompts/` directory:
+If you run `/agent` and see "No agents found", create agent files in your
+project's `.pi/agents/` directory:
 
 ```bash
-mkdir -p .pi/prompts
-cat > .pi/prompts/agent-helper.md << 'EOF'
+mkdir -p .pi/agents
+cat > .pi/agents/helper.md << 'EOF'
 ---
 description: "A helpful general-purpose assistant"
 ---
