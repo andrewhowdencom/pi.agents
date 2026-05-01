@@ -112,6 +112,19 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  // --- Task 6: Inject Active Agent System Instructions ---
+  pi.on("before_agent_start", async (_event, ctx) => {
+    if (!activeAgentName) return;
+
+    const agents = await discoverAgents(pi, ctx.cwd);
+    const agent = agents.find((a) => a.name === activeAgentName);
+    if (!agent) return;
+
+    return {
+      systemPrompt: _event.systemPrompt + "\n\n# Agent Instructions\n\n" + agent.content,
+    };
+  });
+
   pi.on("session_shutdown", async () => {
     clearAgentCache();
   });

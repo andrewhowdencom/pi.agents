@@ -28,8 +28,9 @@ let agentCache: AgentDefinition[] | null = null;
  * frontmatter, and extracts the full prompt body.
  *
  * The content field is used during handoff summarization to understand each
- * agent's role. This extension does NOT inject this content into the system
- * prompt; that is the user's responsibility.
+ * agent's role, and is injected into the system prompt by the
+ * `before_agent_start` handler in the main extension when that agent is
+ * active.
  */
 export async function discoverAgents(
   pi: ExtensionAPI,
