@@ -100,7 +100,7 @@ export default function (pi: ExtensionAPI) {
             };
           }
 
-          const maxTurns = agent.maxTurns ?? 30;
+          const maxTurns = agent.maxTurns;
 
           if (ctx.hasUI) {
             ctx.ui.setWorkingMessage(`Invoking ${agent.name}...`);
@@ -120,10 +120,11 @@ export default function (pi: ExtensionAPI) {
               } | undefined;
               const turn = details?.turnCount ?? 0;
               const total = details?.maxTurns ?? maxTurns;
+              const totalText = total !== undefined ? `/${total}` : "";
               const cost = details?.usage?.cost?.total ?? 0;
               const costText = cost > 0 ? `, ~$${cost.toFixed(4)}` : "";
               ctx.ui.setWorkingMessage(
-                `${agent.name}: turn ${turn}/${total}${costText}`,
+                `${agent.name}: turn ${turn}${totalText}${costText}`,
               );
             }
           };

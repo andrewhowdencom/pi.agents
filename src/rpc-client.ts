@@ -13,7 +13,7 @@ export interface AgentEndEvent {
 }
 
 export interface PiRpcClientOptions {
-  timeoutMs: number;
+  timeoutMs?: number;
   maxTurns?: number;
   signal?: AbortSignal;
 }
@@ -246,10 +246,12 @@ export class PiRpcClient {
       this.resolveCompletion = resolve;
       this.rejectCompletion = reject;
 
-      this.timeoutId = setTimeout(() => {
-        this.kill();
-        reject(new Error("Subagent execution timed out"));
-      }, options.timeoutMs);
+      if (options.timeoutMs !== undefined && options.timeoutMs > 0) {
+        this.timeoutId = setTimeout(() => {
+          this.kill();
+          reject(new Error("Subagent execution timed out"));
+        }, options.timeoutMs);
+      }
 
       if (options.signal) {
         options.signal.addEventListener("abort", () => {

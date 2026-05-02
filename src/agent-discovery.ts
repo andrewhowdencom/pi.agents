@@ -65,9 +65,9 @@ export interface AgentDefinition {
   toolSchema?: ToolParameter[];
   /** LLM model for this subagent (e.g. "anthropic/claude-sonnet-4") */
   model?: string;
-  /** RPC timeout in milliseconds (default: 60000) */
+  /** RPC timeout in milliseconds. When not specified, the subagent runs until completion (no timeout). */
   timeout?: number;
-  /** Maximum turns before forcible stop (default: 5) */
+  /** Maximum turns before forcible stop. When not specified, the subagent runs until completion (no limit). */
   maxTurns?: number;
 }
 

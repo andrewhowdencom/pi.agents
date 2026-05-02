@@ -66,8 +66,8 @@ export async function executeSubagent(
   signal: AbortSignal,
   onUpdate?: SubagentUpdateCallback,
 ): Promise<{ output: string; turnCount: number; timedOut: boolean; usage?: AccumulatedUsage }> {
-  const timeoutMs = agent.timeout ?? 60000;
-  const maxTurns = agent.maxTurns ?? 30;
+  const timeoutMs = agent.timeout;
+  const maxTurns = agent.maxTurns;
   // Compose the prompt from goal + toolSchema params
   const goal = String(params.goal ?? "");
   let prompt = goal;
@@ -146,7 +146,9 @@ export async function executeSubagent(
           content: [
             {
               type: "text",
-              text: `**Turn ${turnCount}/${maxTurns}**\n\n${turnOutput}`,
+              text: maxTurns !== undefined
+                ? `**Turn ${turnCount}/${maxTurns}**\n\n${turnOutput}`
+                : `**Turn ${turnCount}**\n\n${turnOutput}`,
             },
           ],
           details: {
