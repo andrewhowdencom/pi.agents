@@ -3,7 +3,7 @@ import { writeFile, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentDefinition, ToolParameter } from "./agent-discovery.js";
-import { PiRpcClient } from "./rpc-client.js";
+import { PiRpcClient, type AccumulatedUsage } from "./rpc-client.js";
 
 /**
  * Builds a TypeBox schema for a subagent tool from an AgentDefinition.
@@ -47,6 +47,12 @@ export function buildSubagentToolSchema(
   return Type.Object(properties);
 }
 
+type SubagentUpdateCallback = (partial: {
+  content: Array<{ type: "text"; text: string }>;
+  details: unknown;
+  terminate?: boolean;
+}) => void;
+
 /**
  * Execute a subagent via a separate Pi RPC process.
  *
@@ -60,7 +66,8 @@ export async function executeSubagent(
   signal: AbortSignal,
   timeoutMs: number,
   maxTurns: number,
-): Promise<{ output: string; turnCount: number; timedOut: boolean }> {
+  onUpdate?: SubagentUpdateCallback,
+): Promise<{ output: string; turnCount: number; timedOut: boolean; usage?: AccumulatedUsage }> {
   // Compose the prompt from goal + toolSchema params
   const goal = String(params.goal ?? "");
   let prompt = goal;
@@ -92,9 +99,61 @@ export async function executeSubagent(
   let output = "";
   let turnCount = 0;
 
+  let unsubscribe: (() => void) | undefined;
+
   try {
     await client.start();
     await client.sendPrompt(prompt);
+
+    if (onUpdate) {
+      unsubscribe = client.onEvent((event) => {
+        if (event.type !== "turn_end") return;
+
+        const message = event.message;
+        if (
+          !message ||
+          typeof message !== "object" ||
+          (message as Record<string, unknown>).role !== "assistant"
+        ) {
+          return;
+        }
+
+        let turnOutput = "";
+        const content = (message as Record<string, unknown>).content;
+        if (typeof content === "string") {
+          turnOutput = content;
+        } else if (Array.isArray(content)) {
+          turnOutput = content
+            .filter(
+              (c): c is { type: string; text?: string } =>
+                typeof c === "object" && c !== null && "type" in c,
+            )
+            .filter((c) => c.type === "text")
+            .map((c) => c.text ?? "")
+            .join("");
+        }
+
+        if (!turnOutput) return;
+
+        const turnCount = client.getTurnCount();
+        const usage = client.getAccumulatedUsage();
+
+        onUpdate({
+          content: [
+            {
+              type: "text",
+              text: `**Turn ${turnCount}/${maxTurns}**\n\n${turnOutput}`,
+            },
+          ],
+          details: {
+            turnCount,
+            maxTurns,
+            subagentName: agent.name,
+            usage,
+          },
+        });
+      });
+    }
 
     const result = await client.waitForCompletion({
       signal,
@@ -143,9 +202,10 @@ export async function executeSubagent(
       output = `Subagent ${agent.name} failed: ${String(err)}`;
     }
   } finally {
+    unsubscribe?.();
     client.kill();
     await unlink(tempPath).catch(() => {});
   }
 
-  return { output, turnCount, timedOut };
+  return { output, turnCount, timedOut, usage: client.getAccumulatedUsage() };
 }

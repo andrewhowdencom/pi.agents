@@ -18,6 +18,24 @@ export interface PiRpcClientOptions {
   signal?: AbortSignal;
 }
 
+export type RpcEvent = Record<string, unknown>;
+export type RpcEventListener = (event: RpcEvent) => void;
+
+export interface AccumulatedUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    total: number;
+  };
+}
+
 export class PiRpcClient {
   private proc: ChildProcess;
   private buffer = "";
@@ -28,6 +46,8 @@ export class PiRpcClient {
   private maxTurns: number | undefined;
   private timeoutId: NodeJS.Timeout | null = null;
   private killed = false;
+  private eventListeners: RpcEventListener[] = [];
+  private accumulatedUsage: AccumulatedUsage | undefined;
 
   constructor(args: string[]) {
     this.proc = spawn("pi", args, {
@@ -93,8 +113,79 @@ export class PiRpcClient {
   }
 
   private handleEvent(event: Record<string, unknown>) {
+    if (!this.killed) {
+      for (const listener of this.eventListeners) {
+        try {
+          listener(event);
+        } catch {
+          // Ignore listener errors to avoid breaking the RPC stream
+        }
+      }
+    }
+
     if (event.type === "turn_end") {
       this.turnCount++;
+
+      // Accumulate token usage and cost from the turn's assistant message
+      const message = event.message;
+      if (
+        message &&
+        typeof message === "object" &&
+        (message as Record<string, unknown>).role === "assistant"
+      ) {
+        const usage = (message as Record<string, unknown>).usage;
+        if (usage && typeof usage === "object") {
+          const u = usage as Record<string, unknown>;
+          const cost = u.cost;
+          let costObj: AccumulatedUsage["cost"] | undefined;
+          if (cost && typeof cost === "object") {
+            const c = cost as Record<string, unknown>;
+            costObj = {
+              input: typeof c.input === "number" ? c.input : 0,
+              output: typeof c.output === "number" ? c.output : 0,
+              cacheRead: typeof c.cacheRead === "number" ? c.cacheRead : 0,
+              cacheWrite: typeof c.cacheWrite === "number" ? c.cacheWrite : 0,
+              total: typeof c.total === "number" ? c.total : 0,
+            };
+          }
+          const input = typeof u.input === "number" ? u.input : 0;
+          const output = typeof u.output === "number" ? u.output : 0;
+          const cacheRead = typeof u.cacheRead === "number" ? u.cacheRead : 0;
+          const cacheWrite = typeof u.cacheWrite === "number" ? u.cacheWrite : 0;
+          const totalTokens = typeof u.totalTokens === "number" ? u.totalTokens : 0;
+
+          if (!this.accumulatedUsage) {
+            this.accumulatedUsage = {
+              input,
+              output,
+              cacheRead,
+              cacheWrite,
+              totalTokens,
+              cost: costObj ?? {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                total: 0,
+              },
+            };
+          } else {
+            this.accumulatedUsage.input += input;
+            this.accumulatedUsage.output += output;
+            this.accumulatedUsage.cacheRead += cacheRead;
+            this.accumulatedUsage.cacheWrite += cacheWrite;
+            this.accumulatedUsage.totalTokens += totalTokens;
+            if (costObj) {
+              this.accumulatedUsage.cost.input += costObj.input;
+              this.accumulatedUsage.cost.output += costObj.output;
+              this.accumulatedUsage.cost.cacheRead += costObj.cacheRead;
+              this.accumulatedUsage.cost.cacheWrite += costObj.cacheWrite;
+              this.accumulatedUsage.cost.total += costObj.total;
+            }
+          }
+        }
+      }
+
       if (this.maxTurns && this.turnCount > this.maxTurns) {
         this.sendCommand({ type: "abort" });
         this.kill();
@@ -173,9 +264,25 @@ export class PiRpcClient {
     return this.turnCount;
   }
 
+  onEvent(listener: RpcEventListener): () => void {
+    this.eventListeners.push(listener);
+    return () => {
+      const index = this.eventListeners.indexOf(listener);
+      if (index !== -1) {
+        this.eventListeners.splice(index, 1);
+      }
+    };
+  }
+
+  getAccumulatedUsage(): AccumulatedUsage | undefined {
+    return this.accumulatedUsage;
+  }
+
   kill(): void {
     if (this.killed) return;
     this.killed = true;
+    this.eventListeners = [];
+    this.accumulatedUsage = undefined;
 
     if (this.timeoutId) {
       clearTimeout(this.timeoutId);
