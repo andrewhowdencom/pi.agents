@@ -8,12 +8,27 @@ import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { buildSubagentToolSchema, executeSubagent } from "./subagent-tools.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  type WorkflowStep,
+  type ConditionalStep,
+  isConditionalStep,
+  isLinearStep,
+  isPauseStep,
+  WORKFLOW_RESERVED_KEYWORDS,
+  validateWorkflowGraph,
+} from "./workflow-types.js";
+import { discoverWorkflows, clearWorkflowCache } from "./workflow-discovery.js";
+import { WorkflowEngine } from "./workflow-engine.js";
 
 export default function (pi: ExtensionAPI) {
   let activeAgentName: string | undefined;
   const registeredSubagentTools = new Set<string>();
   const MAX_SUBAGENT_DEPTH = 3;
   const subagentStorage = new AsyncLocalStorage<{ depth: number }>();
+
+  // --- Workflow engine and state ---
+  const engine = new WorkflowEngine();
+  let originalToolSet: string[] | null = null;
 
   function getSubagentDepth(): number {
     const store = subagentStorage.getStore();
@@ -33,6 +48,24 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.setStatus("agent", undefined);
       }
     }
+  }
+
+  function updateWorkflowStatus(ctx: ExtensionContext) {
+    if (ctx.hasUI) {
+      const text = engine.getStatusText();
+      if (text) {
+        ctx.ui.setStatus("workflow", `Workflow: ${text}`);
+      } else {
+        ctx.ui.setStatus("workflow", undefined);
+      }
+    }
+  }
+
+  function restoreOriginalTools() {
+    if (originalToolSet) {
+      pi.setActiveTools(originalToolSet);
+    }
+    originalToolSet = null;
   }
 
   function setActiveAgent(ctx: ExtensionContext, name: string | undefined) {
@@ -161,16 +194,21 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // --- Task 3: Register CLI flag for agent switch confirmation ---
+  // --- CLI flags ---
   pi.registerFlag("agent-switch-confirm", {
     description: "Confirm before agent-initiated agent switches",
     type: "boolean",
     default: true,
   });
 
+  pi.registerFlag("workflow-confirm", {
+    description: "Confirm before starting a workflow",
+    type: "boolean",
+    default: true,
+  });
 
+  // --- Event handlers ---
 
-  // --- Task 3: Active Agent State Persistence ---
   pi.on("session_start", async (_event, ctx) => {
     const entries = ctx.sessionManager.getEntries();
     let latestAgentState: { name: string } | undefined;
@@ -195,29 +233,280 @@ export default function (pi: ExtensionAPI) {
       updateAgentStatus(ctx, undefined);
     }
 
+    // Restore workflow state
+    const workflowRestored = engine.restore(entries);
+    if (workflowRestored) {
+      const state = engine.getState();
+      if (state) {
+        const workflows = await discoverWorkflows(pi, ctx.cwd);
+        const def = workflows.find((w) => w.name === state.workflowName);
+        if (def) {
+          engine.attachDefinition(def.definition);
+          if (state.status === "paused") {
+            ctx.ui?.notify(
+              `Workflow '${state.workflowName}' is paused at ${state.currentStepId}. Use /workflow resume to continue.`,
+              "info",
+            );
+          }
+          updateWorkflowStatus(ctx);
+        } else {
+          // Definition no longer available — reset
+          engine.reset();
+        }
+      }
+    }
+
     const agents = await discoverAgents(pi, ctx.cwd);
     registerSubagentTools(agents);
   });
 
-  // --- Task 6: Inject Active Agent System Instructions ---
   pi.on("before_agent_start", async (_event, ctx) => {
-    if (!activeAgentName) return;
+    let systemPrompt = _event.systemPrompt;
 
-    const agents = await discoverAgents(pi, ctx.cwd);
-    const agent = agents.find((a) => a.name === activeAgentName);
-    if (!agent) return;
+    if (activeAgentName) {
+      const agents = await discoverAgents(pi, ctx.cwd);
+      const agent = agents.find((a) => a.name === activeAgentName);
+      if (agent) {
+        systemPrompt +=
+          "\n\n# Agent Instructions\n\n" + agent.content;
+      }
+    }
 
-    return {
-      systemPrompt: _event.systemPrompt + "\n\n# Agent Instructions\n\n" + agent.content,
-    };
+    // Workflow step prompt injection and tool activation
+    if (engine.isAnyWorkflowActive()) {
+      const step = engine.getCurrentStep();
+      if (step) {
+        if (isLinearStep(step) && step.prompt) {
+          systemPrompt += `\n\n# Workflow Step: ${step.id}\n\n${step.prompt}`;
+        } else if (isConditionalStep(step)) {
+          if (step.prompt) {
+            // User override
+            systemPrompt += `\n\n# Workflow Step: ${step.id}\n\n${step.prompt}`;
+          } else if (step.subagents && step.subagents.length > 0) {
+            // Auto-generated coordinator prompt
+            const agents = await discoverAgents(pi, ctx.cwd);
+            const toolNames = step.subagents
+              .map((name) => {
+                const a = agents.find((agent) => agent.name === name);
+                return a?.toolName || `invoke_${name.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+              })
+              .filter(Boolean);
+
+            const availableSignals = Object.keys(step.transitions).join(", ");
+
+            systemPrompt += `\n\n# Workflow Decision Point\n\nYou are at a workflow decision point for step "${step.id}". `;
+            systemPrompt += `The following specialized reviewers are available as subagent tools: ${toolNames.join(", ")}. `;
+            systemPrompt += `Call each with a scoped goal based on the implementation, wait for their output, synthesize all findings, `;
+            systemPrompt += `and then call workflow_signal(signal: '<signal>') to choose the next step. `;
+            systemPrompt += `Available signals: ${availableSignals}.`;
+          } else {
+            // Simple conditional without subagents
+            const availableSignals = Object.keys(step.transitions).join(", ");
+            systemPrompt += `\n\n# Workflow Decision Point\n\nYou are at a workflow decision point for step "${step.id}". `;
+            systemPrompt += `Call workflow_signal(signal: '<signal>') to choose the next step. `;
+            systemPrompt += `Available signals: ${availableSignals}.`;
+          }
+        } else if (isPauseStep(step) && step.prompt) {
+          systemPrompt += `\n\n# Workflow Pause\n\n${step.prompt}`;
+        }
+      }
+
+      // Dynamic tool activation
+      const allTools = pi.getActiveTools();
+      if (!originalToolSet) {
+        originalToolSet = [...allTools];
+      }
+
+      const targetTools = new Set(originalToolSet);
+      const currentStep = engine.getCurrentStep();
+
+      if (currentStep && isConditionalStep(currentStep)) {
+        targetTools.add("workflow_signal");
+
+        if (currentStep.subagents) {
+          const agents = await discoverAgents(pi, ctx.cwd);
+          for (const subName of currentStep.subagents) {
+            const subAgent = agents.find((a) => a.name === subName);
+            if (subAgent?.toolName) {
+              targetTools.add(subAgent.toolName);
+            }
+          }
+        }
+      }
+
+      pi.setActiveTools([...targetTools]);
+    }
+
+    return { systemPrompt };
+  });
+
+  pi.on("agent_end", async (_event, ctx) => {
+    if (!engine.isActive()) return;
+
+    const result = engine.advance();
+    if (!result) return;
+
+    switch (result.type) {
+      case "complete": {
+        engine.persist(pi);
+        const name = engine.getState()?.workflowName;
+        updateWorkflowStatus(ctx);
+        ctx.ui?.notify(
+          `Workflow '${name}' completed successfully`,
+          "info",
+        );
+        engine.reset();
+        restoreOriginalTools();
+        break;
+      }
+
+      case "next": {
+        engine.persist(pi);
+        if (result.step && !isPauseStep(result.step)) {
+          setActiveAgent(ctx, (result.step as any).agent);
+        }
+        updateWorkflowStatus(ctx);
+
+        const nextStep = engine.getCurrentStep();
+        const prompt =
+          nextStep && (nextStep as any).prompt
+            ? (nextStep as any).prompt
+            : `Continue to workflow step: ${result.stepId}`;
+        pi.sendUserMessage(prompt, { deliverAs: "steer" });
+        break;
+      }
+
+      case "retry": {
+        engine.persist(pi);
+        updateWorkflowStatus(ctx);
+        ctx.ui?.notify(
+          `Agent did not signal a transition. Retrying with reminder...`,
+          "warning",
+        );
+        pi.sendUserMessage(
+          "Please call workflow_signal to proceed with the workflow.",
+          { deliverAs: "steer" },
+        );
+        break;
+      }
+
+      case "needs-intervention": {
+        engine.persist(pi);
+        updateWorkflowStatus(ctx);
+
+        if (result.availableTransitions.length > 0) {
+          if (ctx.hasUI) {
+            const choice = await ctx.ui.select(
+              "Workflow paused — select next step:",
+              result.availableTransitions.map((t) => {
+                const step = engine.getCurrentStep();
+                const target =
+                  step && isConditionalStep(step)
+                    ? step.transitions[t]?.target
+                    : undefined;
+                return {
+                  value: t,
+                  label: t,
+                  description: target ? `→ ${target}` : undefined,
+                };
+              }),
+            );
+
+            if (choice) {
+              engine.forceTransition(choice);
+              const nextResult = engine.advance();
+              if (nextResult && nextResult.type === "next") {
+                engine.persist(pi);
+                if (nextResult.step && !isPauseStep(nextResult.step)) {
+                  setActiveAgent(ctx, (nextResult.step as any).agent);
+                }
+                updateWorkflowStatus(ctx);
+                const nextPrompt =
+                  nextResult.step && (nextResult.step as any).prompt
+                    ? (nextResult.step as any).prompt
+                    : `Continue to workflow step: ${nextResult.stepId}`;
+                pi.sendUserMessage(nextPrompt, { deliverAs: "steer" });
+              }
+            } else {
+              ctx.ui?.notify(
+                "Workflow intervention cancelled. Use /workflow resume to continue.",
+                "info",
+              );
+            }
+          } else {
+            // Non-interactive mode: abort with error instead of pausing
+            engine.abort();
+            engine.persist(pi);
+            console.error(
+              "[pi-agents] Workflow aborted: agent did not signal a transition and no UI available for intervention.",
+            );
+            engine.reset();
+            restoreOriginalTools();
+          }
+        } else {
+          ctx.ui?.notify(
+            "Workflow paused. Use /workflow resume to continue.",
+            "info",
+          );
+        }
+        break;
+      }
+
+      case "error": {
+        engine.persist(pi);
+        ctx.ui?.notify(`Workflow error: ${result.message}`, "error");
+        engine.reset();
+        restoreOriginalTools();
+        break;
+      }
+    }
+  });
+
+  pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName === "switch_agent" && engine.isAnyWorkflowActive()) {
+      ctx.ui?.notify(
+        "Agent attempted manual switch during workflow. Use workflow_signal for conditional steps, or abort with /workflow abort.",
+        "warning",
+      );
+      return {
+        block: true,
+        reason: "Manual agent switches are disabled during workflow execution.",
+      };
+    }
+  });
+
+  pi.on("session_before_switch", async (_event, ctx) => {
+    if (engine.isAnyWorkflowActive()) {
+      const name = engine.getState()?.workflowName;
+      if (ctx.hasUI) {
+        const ok = await ctx.ui.confirm(
+          "Session Switch",
+          `Switching sessions will abort the running workflow '${name}'. Continue?`,
+        );
+        if (!ok) {
+          return { cancel: true };
+        }
+      }
+      engine.abort();
+      engine.persist(pi);
+      updateWorkflowStatus(ctx);
+      engine.reset();
+      restoreOriginalTools();
+    }
   });
 
   pi.on("session_shutdown", async () => {
     clearAgentCache();
     registeredSubagentTools.clear();
+
+    if (engine.isAnyWorkflowActive()) {
+      engine.persist(pi);
+    }
+    clearWorkflowCache();
   });
 
-  // --- Task 4: /agent Command and Visual Mode Switching ---
+  // --- Commands ---
+
   pi.registerCommand("agent", {
     description: "Select or switch agent",
     handler: async (args, ctx) => {
@@ -239,7 +528,6 @@ export default function (pi: ExtensionAPI) {
       let selectedAgent: AgentDefinition | undefined;
 
       if (args.trim()) {
-        // Direct agent selection by name
         const targetName = args.trim();
         selectedAgent = agents.find((a) => a.name === targetName);
         if (!selectedAgent) {
@@ -247,7 +535,6 @@ export default function (pi: ExtensionAPI) {
           return;
         }
       } else {
-        // Show selector picker
         const choice = await ctx.ui.select(
           "Select agent:",
           agents.map((a) => ({
@@ -257,7 +544,7 @@ export default function (pi: ExtensionAPI) {
           })),
         );
         if (!choice) {
-          return; // User cancelled
+          return;
         }
         selectedAgent = agents.find((a) => a.name === choice);
       }
@@ -266,7 +553,6 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // Check if we're switching agents or just selecting one
       if (activeAgentName === selectedAgent.name) {
         ctx.ui.notify(`Already using agent ${selectedAgent.name}`, "info");
         return;
@@ -277,7 +563,266 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // --- Task 1: switch_agent tool for autonomous agent handoff ---
+  async function showWorkflowPicker(ctx: ExtensionContext) {
+    const workflows = await discoverWorkflows(pi, ctx.cwd);
+    if (workflows.length === 0) {
+      ctx.ui?.notify(
+        "No workflows found. Create .pi/workflows/<name>.yml files.",
+        "warning",
+      );
+      return null;
+    }
+
+    const choice = await ctx.ui.select(
+      "Select workflow:",
+      workflows.map((w) => ({
+        value: w.name,
+        label: w.name,
+        description: w.definition.description || "",
+      })),
+    );
+    return choice;
+  }
+
+  pi.registerCommand("workflow", {
+    description: "Manage workflows: start, pause, resume, abort, check status, or list",
+    handler: async (args, ctx) => {
+      const trimmed = args.trim();
+      const parts = trimmed.split(/\s+/);
+      const firstArg = parts[0].toLowerCase();
+
+      // No args
+      if (!trimmed) {
+        if (engine.isAnyWorkflowActive()) {
+          ctx.ui?.notify(engine.getDetailedStatus(), "info");
+        } else {
+          const choice = await showWorkflowPicker(ctx);
+          if (choice) {
+            // Start the selected workflow
+            await startWorkflowByName(choice, ctx);
+          }
+        }
+        return;
+      }
+
+      // Subcommands
+      if (WORKFLOW_RESERVED_KEYWORDS.has(firstArg)) {
+        switch (firstArg) {
+          case "pause": {
+            if (!engine.isActive()) {
+              ctx.ui?.notify("No workflow is currently running.", "warning");
+              return;
+            }
+            engine.pause();
+            engine.persist(pi);
+            updateWorkflowStatus(ctx);
+            ctx.ui?.notify(
+              `Workflow paused at ${engine.getState()?.currentStepId}. Use /workflow resume to continue.`,
+              "info",
+            );
+            return;
+          }
+
+          case "resume": {
+            if (!engine.isPaused()) {
+              ctx.ui?.notify("No workflow is currently paused.", "warning");
+              return;
+            }
+            engine.resume();
+            engine.persist(pi);
+            updateWorkflowStatus(ctx);
+            ctx.ui?.notify("Workflow resumed.", "info");
+
+            const step = engine.getCurrentStep();
+            const prompt =
+              step && (step as any).prompt
+                ? (step as any).prompt
+                : "Continue workflow.";
+            pi.sendUserMessage(prompt, { deliverAs: "steer" });
+            return;
+          }
+
+          case "abort": {
+            if (!engine.isAnyWorkflowActive()) {
+              ctx.ui?.notify("No workflow is currently active.", "warning");
+              return;
+            }
+            if (ctx.hasUI) {
+              const ok = await ctx.ui.confirm(
+                "Abort Workflow",
+                `Abort workflow '${engine.getState()?.workflowName}'?`,
+              );
+              if (!ok) return;
+            }
+            engine.abort();
+            engine.persist(pi);
+            updateWorkflowStatus(ctx);
+            ctx.ui?.notify(
+              `Workflow '${engine.getState()?.workflowName}' aborted.`,
+              "info",
+            );
+            engine.reset();
+            restoreOriginalTools();
+            return;
+          }
+
+          case "status": {
+            ctx.ui?.notify(
+              engine.isAnyWorkflowActive()
+                ? engine.getDetailedStatus()
+                : "No workflow is currently running.",
+              "info",
+            );
+            return;
+          }
+
+          case "list": {
+            const choice = await showWorkflowPicker(ctx);
+            if (choice) {
+              await startWorkflowByName(choice, ctx);
+            }
+            return;
+          }
+        }
+      }
+
+      // Start workflow by name
+      const workflowName = trimmed;
+      await startWorkflowByName(workflowName, ctx);
+    },
+  });
+
+  async function startWorkflowByName(workflowName: string, ctx: ExtensionContext) {
+    const workflows = await discoverWorkflows(pi, ctx.cwd);
+    const workflow = workflows.find((w) => w.name === workflowName);
+
+    if (!workflow) {
+      ctx.ui?.notify(
+        `Workflow "${workflowName}" not found. Use /workflow list to see available workflows.`,
+        "error",
+      );
+      return;
+    }
+
+    if (engine.isAnyWorkflowActive()) {
+      ctx.ui?.notify(
+        "A workflow is already active. Abort it with /workflow abort before starting a new one.",
+        "warning",
+      );
+      return;
+    }
+
+    const confirmWorkflows = pi.getFlag("workflow-confirm") ?? true;
+    if (ctx.hasUI && confirmWorkflows) {
+      const firstStep = workflow.definition.steps[0];
+      const firstAgent = isPauseStep(firstStep)
+        ? "user"
+        : (firstStep as any).agent;
+      const ok = await ctx.ui.confirm(
+        "Start Workflow",
+        `Start workflow '${workflowName}'? (Step 1/${workflow.definition.steps.length}: ${firstAgent})`,
+      );
+      if (!ok) return;
+    }
+
+    // Validate workflow graph structure
+    const graphValidation = validateWorkflowGraph(workflow.definition);
+    if (!graphValidation.valid) {
+      ctx.ui?.notify(
+        `Workflow graph is invalid:\n${graphValidation.errors.join("\n")}`,
+        "error",
+      );
+      return;
+    }
+
+    engine.start(workflow.definition);
+    originalToolSet = pi.getActiveTools();
+
+    // Validate agents
+    const agents = await discoverAgents(pi, ctx.cwd);
+    const validNames = new Set(agents.map((a) => a.name));
+    const validation = engine.validateAgents(validNames);
+    if (!validation.valid) {
+      ctx.ui?.notify(
+        `Workflow references unknown agents: ${validation.missing.join(", ")}. Aborting.`,
+        "error",
+      );
+      engine.reset();
+      restoreOriginalTools();
+      return;
+    }
+
+    engine.persist(pi);
+
+    const firstStep = workflow.definition.steps[0];
+    if (!isPauseStep(firstStep)) {
+      setActiveAgent(ctx, (firstStep as any).agent);
+    }
+    updateWorkflowStatus(ctx);
+    ctx.ui?.notify(
+      `Workflow '${workflowName}' started. Step 1/${workflow.definition.steps.length}: ${isPauseStep(firstStep) ? "user" : (firstStep as any).agent}`,
+      "info",
+    );
+
+    const prompt =
+      (firstStep as any).prompt || "Begin the workflow.";
+    pi.sendUserMessage(prompt, { deliverAs: "steer" });
+  }
+
+  pi.registerCommand("chain", {
+    description: "Run an ad-hoc linear chain of agents",
+    handler: async (args, ctx) => {
+      const agentNames = args.trim().split(/\s+/).filter(Boolean);
+      if (agentNames.length === 0) {
+        ctx.ui?.notify("Usage: /chain <agent1> <agent2> ...", "warning");
+        return;
+      }
+
+      if (engine.isAnyWorkflowActive()) {
+        ctx.ui?.notify(
+          "A workflow is already active. Abort it with /workflow abort before starting a chain.",
+          "warning",
+        );
+        return;
+      }
+
+      const agents = await discoverAgents(pi, ctx.cwd);
+      const validNames = new Set(agents.map((a) => a.name));
+      const invalid = agentNames.filter((n) => !validNames.has(n));
+      if (invalid.length > 0) {
+        ctx.ui?.notify(`Unknown agents: ${invalid.join(", ")}`, "error");
+        return;
+      }
+
+      const confirmWorkflows = pi.getFlag("workflow-confirm") ?? true;
+      if (ctx.hasUI && confirmWorkflows) {
+        const ok = await ctx.ui.confirm(
+          "Start Chain",
+          `Start linear chain: ${agentNames.join(" → ")}?`,
+        );
+        if (!ok) return;
+      }
+
+      engine.startChain(agentNames);
+      originalToolSet = pi.getActiveTools();
+      engine.persist(pi);
+
+      const firstAgent = agentNames[0];
+      setActiveAgent(ctx, firstAgent);
+      updateWorkflowStatus(ctx);
+      ctx.ui?.notify(
+        `Starting chain: ${agentNames.join(" → ")}`,
+        "info",
+      );
+
+      pi.sendUserMessage("Begin the workflow chain.", {
+        deliverAs: "steer",
+      });
+    },
+  });
+
+  // --- Tools ---
+
   pi.registerTool({
     name: "switch_agent",
     label: "Switch Agent",
@@ -296,7 +841,6 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       try {
-        // Validate style
         if (params.style === "summarize") {
           return {
             content: [
@@ -310,10 +854,8 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // Discover available agents
         const agents = await discoverAgents(pi, ctx.cwd);
 
-        // Validate target exists
         const targetAgent = agents.find((a) => a.name === params.agent);
         if (!targetAgent) {
           const availableAgents = agents.map((a) => a.name).join(", ");
@@ -329,7 +871,6 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // Prevent self-switch
         if (activeAgentName === params.agent) {
           return {
             content: [
@@ -343,7 +884,6 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
-        // User confirmation (guardrail)
         const confirmSwitches = pi.getFlag("agent-switch-confirm") ?? true;
         if (ctx.hasUI && confirmSwitches) {
           const currentAgentLabel = activeAgentName || "default";
@@ -365,7 +905,6 @@ export default function (pi: ExtensionAPI) {
           }
         }
 
-        // Perform the switch
         setActiveAgent(ctx, params.agent);
 
         return {
@@ -389,6 +928,88 @@ export default function (pi: ExtensionAPI) {
           isError: true,
         };
       }
+    },
+  });
+
+  pi.registerTool({
+    name: "workflow_signal",
+    label: "Workflow Signal",
+    description:
+      "Signal the outcome of a workflow decision point to advance to the next step.",
+    promptSnippet:
+      "Call workflow_signal at a workflow decision point to choose the next step",
+    promptGuidelines: [
+      "Use workflow_signal when you have completed your review or decision and need to advance the workflow.",
+      "The signal name must match one of the available transitions for the current workflow step.",
+    ],
+    parameters: Type.Object({
+      signal: Type.String({
+        description:
+          "The transition signal name (e.g., 'approved', 'changes_needed')",
+      }),
+      feedback: Type.Optional(
+        Type.String({
+          description: "Optional feedback to pass to the next step",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (!engine.isAnyWorkflowActive()) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No active workflow step. workflow_signal can only be called during a workflow.",
+            },
+          ],
+          details: {},
+          isError: true,
+        };
+      }
+
+      const step = engine.getCurrentStep();
+      if (!step || !isConditionalStep(step)) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Not at a workflow decision point. workflow_signal can only be called at conditional workflow steps.",
+            },
+          ],
+          details: {},
+          isError: true,
+        };
+      }
+
+      const success = engine.recordSignal(params.signal, params.feedback);
+      if (!success) {
+        const available = Object.keys(step.transitions).join(", ");
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Invalid signal "${params.signal}". Available transitions: ${available}.`,
+            },
+          ],
+          details: { availableTransitions: Object.keys(step.transitions) },
+          isError: true,
+        };
+      }
+
+      const target = step.transitions[params.signal]?.target;
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Signal "${params.signal}" received. Transitioning to ${target} after this turn completes.`,
+          },
+        ],
+        details: {
+          target,
+          signal: params.signal,
+          feedback: params.feedback,
+        },
+      };
     },
   });
 }

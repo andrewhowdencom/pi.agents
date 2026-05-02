@@ -1,0 +1,26 @@
+name: code-review
+description: "Focused code review with security and style checks"
+
+steps:
+  - id: reviewer
+    agent: reviewer
+    type: conditional
+    subagents:
+      - security-reviewer
+      - style-reviewer
+    transitions:
+      approved:
+        target: complete
+      changes_needed:
+        target: fixer
+    loop_max: 3
+    loop_message: "Maximum review iterations reached. Provide direction to continue."
+
+  - id: fixer
+    agent: executor
+    type: linear
+    prompt: "Address the review feedback and make the necessary changes."
+
+  - id: complete
+    type: pause
+    prompt: "Code review complete. Provide any final comments before finishing."

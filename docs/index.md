@@ -146,6 +146,136 @@ Example:
 > compaction automatically trims older context as it grows, and you can always
 > start a fresh Pi session if a completely clean break is needed.
 
+### Workflows
+
+Workflows are declarative YAML files that define multi-agent execution pipelines. Pi automatically hands off between agents in sequence, with conditional transitions driven by explicit tool calls.
+
+#### Workflow Discovery
+
+Workflow files are discovered from:
+- `.pi/workflows/*.yml` (project-local, takes precedence)
+- `~/.pi/agent/workflows/*.yml` (global)
+
+Files use their basename (without `.yml`) as the workflow name. Reserved keywords (`pause`, `resume`, `abort`, `status`, `list`) cannot be used as workflow names.
+
+#### Step Types
+
+**`linear`** — The agent performs its task; the engine automatically advances to the next step when the agent finishes.
+
+```yaml
+- id: executor
+  agent: executor
+  type: linear
+  prompt: "Implement the plan described in the previous step."
+```
+
+**`conditional`** — The agent performs its task and then calls `workflow_signal(signal, feedback?)` to choose the next step. The engine validates the signal against the `transitions` map.
+
+```yaml
+- id: reviewer
+  agent: reviewer
+  type: conditional
+  transitions:
+    approved:
+      target: committer
+    changes_needed:
+      target: executor
+      message: "Review feedback: {{feedback}}"
+  loop_max: 5
+```
+
+**`pause`** — The workflow unconditionally stops. The user can continue the conversation normally, then resume with `/workflow resume`.
+
+```yaml
+- id: user_intervention
+  type: pause
+  prompt: "Provide your direction to continue the workflow."
+```
+
+#### Subagent Composition
+
+Conditional steps can declare `subagents` to leverage specialized reviewers without complicating the workflow graph:
+
+```yaml
+- id: reviewer
+  agent: reviewer
+  type: conditional
+  subagents:
+    - security-reviewer
+    - performance-reviewer
+    - style-reviewer
+  transitions:
+    approved: committer
+    changes_needed: executor
+```
+
+When `subagents` is present but `prompt` is absent, the engine **auto-generates a coordinator prompt** that:
+- Lists the available `invoke_*` subagent tools
+- Instructs the agent to call each with a scoped goal
+- Reminds the agent to synthesize findings and call `workflow_signal`
+
+**User override**: Provide a custom `prompt` to replace the auto-generated one entirely. This is useful for customizing decision criteria (e.g., *"Only block on HIGH or CRITICAL security findings"*) or skipping certain subagents for an MVP.
+
+```yaml
+- id: reviewer
+  agent: reviewer
+  type: conditional
+  subagents:
+    - security-reviewer
+    - performance-reviewer
+  prompt: >
+    Skip style review for this MVP. Only request changes if
+    security or performance reviewers report HIGH or CRITICAL issues.
+    Call workflow_signal when done.
+  transitions:
+    approved: committer
+    changes_needed: executor
+```
+
+Each subagent runs in an isolated RPC process with its own system prompt and optional model override (via the subagent file's frontmatter `model:` field), so a lightweight model can handle style while a heavy model handles security.
+
+#### Commands
+
+| Command | Description |
+|---|---|
+| `/workflow` | Show status if active, otherwise show workflow picker |
+| `/workflow <name>` | Start a workflow by name |
+| `/workflow list` | Show picker with available workflows |
+| `/workflow pause` | Pause the current workflow |
+| `/workflow resume` | Resume a paused workflow |
+| `/workflow abort` | Abort the current workflow with confirmation |
+| `/workflow status` | Show detailed workflow status |
+| `/chain <agents...>` | Run an ad-hoc linear chain (e.g., `/chain planner executor reviewer`) |
+
+#### Visual Progress
+
+The status bar shows the current workflow step:
+```
+Agent: executor | Workflow: plan-build-review (Step 2/5)
+Agent: reviewer | Workflow: plan-build-review (Step 3/5 — awaiting signal)
+Agent: reviewer | Workflow: plan-build-review (Step 3/5, loop 2/5)
+```
+
+#### Troubleshooting
+
+**"Agent forgot to call workflow_signal"**
+- The engine retries once with a system-prompt reminder
+- If still no signal, the workflow pauses and a picker dialog shows the available transitions
+- Pick one to continue, or abort with `/workflow abort`
+
+**"Workflow paused unexpectedly"**
+- Check if a conditional step hit its `loop_max` limit
+- The status notification shows the current step and loop count
+- Resume with `/workflow resume` or abort with `/workflow abort`
+
+**"Subagent timed out during review step"**
+- Increase the subagent's `timeout` in its frontmatter (milliseconds)
+- Or reduce the scope of the subagent's goal in the coordinator prompt
+
+**"Workflow references unknown agents"**
+- Ensure all `agent` names in the workflow YAML match basenames of `.md` files in `.pi/agents/`
+- Ensure all `subagents` names also match discovered agent files and have `subagent: true` in their frontmatter
+
 ### Session Persistence
 
 The active agent is persisted in the session file and restored when you:

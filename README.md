@@ -319,6 +319,121 @@ separate `pi --mode rpc` process, and Pi does not expose an API to inject
 external usage data into the parent's `SessionStats`. The `usage` field in the
 tool result details provides the complete subagent cost breakdown.
 
+### Workflows
+
+Workflows enable **automated multi-agent execution pipelines**. You define a directed graph of agent steps as a YAML file; Pi automatically hands off between agents in sequence, with support for conditional transitions driven by explicit agent tool calls rather than text parsing.
+
+#### Workflow YAML Files
+
+Workflows are defined in `.pi/workflows/*.yml` (project-local) or `~/.pi/agent/workflows/*.yml` (global):
+
+```yaml
+name: plan-build-review
+description: "Plan, implement, review, and commit changes"
+
+steps:
+  - id: planner
+    agent: planner
+    type: linear
+    prompt: "Analyze requirements and produce a detailed implementation plan."
+
+  - id: executor
+    agent: executor
+    type: linear
+    prompt: "Implement the plan described in the previous step."
+
+  - id: reviewer
+    agent: reviewer
+    type: conditional
+    subagents:
+      - security-reviewer
+      - performance-reviewer
+      - style-reviewer
+    transitions:
+      approved:
+        target: committer
+      changes_needed:
+        target: executor
+        message: "Review feedback: {{feedback}}"
+      escalate:
+        target: user_intervention
+    loop_max: 5
+
+  - id: committer
+    agent: committer
+    type: linear
+    prompt: "Commit the changes with an appropriate commit message."
+
+  - id: user_intervention
+    type: pause
+    prompt: "Workflow paused for user direction. Please provide guidance to continue."
+```
+
+**Step types:**
+
+| Type | Behavior | Agent tool call required |
+|---|---|---|
+| `linear` | Auto-advances to next step when agent finishes | No |
+| `conditional` | Waits for `workflow_signal` tool call from agent to choose transition | Yes |
+| `pause` | Unconditionally stops; user resumes with `/workflow resume` | N/A |
+
+**Conditional transitions:** The agent calls `workflow_signal(signal: "approved")` to select a transition. The `message` field under a transition supports `{{feedback}}` to pass the agent's feedback to the next step.
+
+**Subagent composition:** When a conditional step declares `subagents`, the engine auto-generates a coordinator prompt that lists the available `invoke_*` tools. The agent invokes each subagent, synthesizes their outputs, and then calls `workflow_signal`. You can override this with a custom `prompt` field.
+
+**Loop limits:** `loop_max` on a conditional step limits how many times that step can be visited. Exceeding the limit pauses the workflow for user direction.
+
+#### Starting a Workflow
+
+```
+/workflow           # Show picker with discovered workflows
+/workflow plan-build-review  # Start by name
+/workflow list      # List available workflows
+/workflow status    # Show current workflow status
+```
+
+The status bar shows real-time progress:
+```
+Agent: executor | Workflow: plan-build-review (Step 2/5)
+Agent: reviewer | Workflow: plan-build-review (Step 3/5 — awaiting signal)
+Agent: reviewer | Workflow: plan-build-review (Step 3/5, loop 2/5)
+```
+
+#### Ad-Hoc Linear Chains
+
+For quick one-off pipelines without creating a YAML file:
+
+```
+/chain planner executor reviewer committer
+```
+
+This runs a linear sequence with auto-transitions and no conditional logic.
+
+#### Controlling a Running Workflow
+
+```
+/workflow pause     # Pause the workflow (conversation continues normally)
+/workflow resume    # Resume from the current step
+/workflow abort     # Abort the current workflow
+```
+
+When paused, the conversation continues normally with the current agent. The engine simply stops auto-advancing. All messages during a pause are part of the session history and visible to the next agent when resumed.
+
+#### Fallback Behavior
+
+If an agent at a conditional step finishes without calling `workflow_signal`:
+
+1. The engine **retries once** with a system-prompt reminder
+2. If still no signal, the workflow **pauses** and presents a picker with the available transitions
+3. In non-interactive mode (print/JSON), the workflow **aborts with an error** instead of pausing
+
+#### Session Persistence
+
+Workflow state is persisted alongside agent state. When you resume a session (`/resume`) or restart Pi:
+
+- **Paused workflows** are restored with a notification: *"Workflow 'X' is paused at step Y. Use /workflow resume to continue."*
+- **Running workflows** are noted but not auto-triggered to avoid unexpected turns
+
 ### Session Persistence
 
 The active agent is persisted in the session file and restored when you:

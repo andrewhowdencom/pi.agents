@@ -1,0 +1,40 @@
+name: plan-build-review
+description: "Plan, implement, review with specialized subagents, and commit changes"
+
+steps:
+  - id: planner
+    agent: planner
+    type: linear
+    prompt: "Analyze requirements and produce a detailed implementation plan."
+
+  - id: executor
+    agent: executor
+    type: linear
+    prompt: "Implement the plan described in the previous step."
+
+  - id: reviewer
+    agent: reviewer
+    type: conditional
+    subagents:
+      - security-reviewer
+      - performance-reviewer
+      - style-reviewer
+    transitions:
+      approved:
+        target: committer
+      changes_needed:
+        target: executor
+        message: "Review feedback: {{feedback}}"
+      escalate:
+        target: user_intervention
+    loop_max: 5
+    loop_message: "Maximum review iterations reached. Pausing for user direction."
+
+  - id: committer
+    agent: committer
+    type: linear
+    prompt: "Commit the changes with an appropriate commit message."
+
+  - id: user_intervention
+    type: pause
+    prompt: "Workflow paused for user direction. Please provide guidance to continue."
