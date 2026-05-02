@@ -1,12 +1,9 @@
 import type {
   ExtensionAPI,
-  ExtensionCommandContext,
   ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
-import { BorderedLoader } from "@mariozechner/pi-coding-agent";
 import type { AgentDefinition } from "./agent-discovery.js";
 import { discoverAgents, clearAgentCache } from "./agent-discovery.js";
-import { summarizeBranchForAgentSwitch } from "./summarize.js";
 
 export default function (pi: ExtensionAPI) {
   let activeAgentName: string | undefined;
@@ -26,108 +23,6 @@ export default function (pi: ExtensionAPI) {
     updateAgentStatus(ctx, name);
     if (name) {
       pi.appendEntry("agent-state", { name });
-    }
-  }
-
-  async function performAgentSwitch(
-    targetAgent: AgentDefinition,
-    ctx: ExtensionCommandContext,
-  ) {
-    try {
-      if (ctx.hasUI) {
-        ctx.ui.notify(`Handing off to ${targetAgent.name}...`, "info");
-        ctx.ui.setStatus("handoff", `Summarizing for ${targetAgent.name}...`);
-      }
-
-      const summary = await ctx.ui.custom<string | null>((tui, theme, _kb, done) => {
-        const loader = new BorderedLoader(
-          tui,
-          theme,
-          `Summarizing conversation for ${targetAgent.name}...`,
-        );
-        loader.onAbort = () => done(null);
-
-        (async () => {
-          try {
-            const sourceAgent = activeAgentName
-              ? (await discoverAgents(pi, ctx.cwd)).find((a) => a.name === activeAgentName)
-              : undefined;
-
-            const branch = ctx.sessionManager.getBranch();
-            const result = await summarizeBranchForAgentSwitch(
-              branch,
-              sourceAgent,
-              targetAgent,
-              ctx,
-              loader.signal,
-            );
-            done(result);
-          } catch (err) {
-            if (err instanceof Error && err.message === "Summarization cancelled") {
-              done(null);
-              return;
-            }
-            console.error("[pi-agents] Handoff failed:", err);
-            done(null);
-          }
-        })();
-
-        return loader;
-      });
-
-      if (summary === null) {
-        if (ctx.hasUI) {
-          ctx.ui.setStatus("handoff", undefined);
-          ctx.ui.notify("Agent switch cancelled", "info");
-        }
-        return;
-      }
-
-      if (ctx.hasUI) {
-        ctx.ui.setStatus("handoff", `Creating session for ${targetAgent.name}...`);
-      }
-
-      const currentSessionFile = ctx.sessionManager.getSessionFile();
-      const targetAgentName = targetAgent.name;
-
-      const newSessionResult = await ctx.newSession({
-        parentSession: currentSessionFile,
-        setup: async (sm) => {
-          sm.appendMessage({
-            role: "user",
-            content: [{ type: "text", text: summary }],
-            timestamp: Date.now(),
-          });
-          sm.appendMessage({
-            role: "custom",
-            customType: "agent-state",
-            content: [{ type: "text", text: targetAgentName }],
-            display: false,
-            details: { name: targetAgentName },
-            timestamp: Date.now(),
-          });
-        },
-        withSession: async (replacementCtx) => {
-          replacementCtx.ui.setStatus("handoff", undefined);
-          replacementCtx.ui.notify(
-            `Handoff to ${targetAgentName} complete`,
-            "info",
-          );
-        },
-      });
-
-      if (newSessionResult.cancelled) {
-        if (ctx.hasUI) {
-          ctx.ui.setStatus("handoff", undefined);
-          ctx.ui.notify("Agent switch cancelled", "info");
-        }
-      }
-    } catch (err) {
-      console.error("[pi-agents] Handoff failed:", err);
-      if (ctx.hasUI) {
-        ctx.ui.setStatus("handoff", undefined);
-        ctx.ui.notify("Agent switch failed. Session unchanged.", "error");
-      }
     }
   }
 
@@ -229,14 +124,8 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      if (activeAgentName) {
-        // --- Task 5: Role-Aware Summarization and New Session Handoff ---
-        await performAgentSwitch(selectedAgent, ctx);
-      } else {
-        // No prior agent active - just set the active agent
-        setActiveAgent(ctx, selectedAgent.name);
-        ctx.ui.notify(`Agent set to ${selectedAgent.name}`, "info");
-      }
+      setActiveAgent(ctx, selectedAgent.name);
+      ctx.ui.notify(`Agent set to ${selectedAgent.name}`, "info");
     },
   });
 }

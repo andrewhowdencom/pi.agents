@@ -1,20 +1,18 @@
 # pi.agents
 
-Pi extension plugin for agent selection and role-aware handoff switching.
+Pi extension plugin for agent selection and lightweight switching.
 
 ## Overview
 
 This Pi extension enables users to visually select and switch between specialized
 "agents" (personas defined by prompt templates). The extension tracks the active
-agent as a visual mode indicator in the status bar. When switching agents, it
-performs a **role-aware handoff**: it summarizes the current conversation with
-explicit knowledge of both the current and new agent's roles, discards the old
-history, and instantiates a new Pi session seeded with only that tailored summary.
+agent as a visual mode indicator in the status bar. When switching agents, the
+active agent name changes and the new agent's system prompt is injected on the
+next turn — all within the same session, with full conversation history preserved.
 
 > **Note**: The actual system prompt for each agent is managed externally by the
 > user (e.g., via `--system-prompt`, `SYSTEM.md`, or Pi harness configuration),
-> not by this extension. This extension only manages agent switching and handoff
-> summaries.
+> not by this extension. This extension only manages agent selection and switching.
 
 ## Installation
 
@@ -85,7 +83,7 @@ scalability, and maintainability.
 
 - The **frontmatter** can include a `description` field (shown in the selector UI)
 - The **body** (after frontmatter) captures the agent's role description and is
-  used during handoff summarization to understand the agent's responsibilities
+  used during agent switching to understand the agent's responsibilities
 
 > **Important**: This extension does NOT inject the prompt body into the system
 > prompt. You must configure the system prompt externally before starting the new
@@ -120,21 +118,19 @@ Run `/agent` with an agent name to select it directly:
 /agent builder
 ```
 
-### Switching Agents (Role-Aware Handoff)
+### Switching Agents
 
 When an agent is already active and you select a different one, the extension
-performs a role-aware handoff:
+performs an instant lightweight switch:
 
-1. A loading overlay appears while the conversation is summarized for the new
-   agent's role. You can cancel the handoff at any time during this step by
-   pressing **Escape** or the loader's cancel action—this aborts the LLM call
-   and leaves your current session completely unchanged.
-2. The status bar cycles through phase indicators: **"Summarizing for
-   {agent}..."** → **"Creating session for {agent}..."** → cleared when the
-   handoff completes.
-3. Creates a new session file with the old session as `parentSession`
-4. Seeds the new session with only the summary and the new agent state
-5. Notifies you when the handoff is complete
+1. The active agent name is updated in the status bar
+2. A custom `agent-state` entry is appended to the current session
+3. The new agent's system prompt is injected on the next turn via the
+   `before_agent_start` handler
+
+The conversation history remains fully intact. The new agent sees all prior
+user and assistant messages, allowing it to continue from where the previous
+agent left off.
 
 Example:
 
@@ -143,9 +139,12 @@ Example:
 /agent builder
 ```
 
-The new session will contain a single user message with the handoff summary,
-ensuring the builder agent receives only relevant context (decisions, files,
-blockers, next steps) without the full planner conversation history.
+> **Context fidelity trade-off**: Because the full conversation history is
+> preserved, the new agent may see reasoning from a previous agent that used a
+> different approach or made contradictory decisions. This is an accepted trade-off
+> in exchange for simplicity and complete history preservation. Pi's built-in
+> compaction automatically trims older context as it grows, and you can always
+> start a fresh Pi session if a completely clean break is needed.
 
 ### Session Persistence
 
@@ -179,21 +178,18 @@ The active agent name is stored as a custom entry (`agent-state`) in the session
 via `pi.appendEntry()`. On `session_start`, the extension scans entries and
 restores the active agent, updating the status bar.
 
-### Role-Aware Summarization
+### Agent Switching
 
-When switching agents, the extension:
+Agent switching is a same-session operation. When the user runs `/agent <name>`:
 
-1. Serializes the current conversation branch (including compaction summaries)
-2. Builds a prompt that includes both agents' role descriptions
-3. Calls the LLM to generate a focused summary relevant to the target agent
-4. Falls back to a naive truncation summary if the LLM is unavailable
+1. The module-level `activeAgentName` is updated
+2. The status bar is updated to show the new agent
+3. A custom `agent-state` entry is appended to the current session
+4. On the next `before_agent_start` event, the new agent's content is injected
+   into the system prompt
 
-### New Session Creation
-
-The handoff creates a clean session break via `ctx.newSession()`:
-- `parentSession` links to the original session file
-- `setup` appends the summary as a user message and the new agent state
-- `withSession` notifies the user that the handoff is complete
+No summarization, no new session creation, no history loss. Context growth is
+managed entirely by Pi's built-in compaction.
 
 ## License
 
