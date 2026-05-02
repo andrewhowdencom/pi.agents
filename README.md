@@ -202,6 +202,77 @@ continues from the full conversation history.
 pattern — the caller resumes after the subagent finishes. `switch_agent` is a
 permanent transfer — the caller agent is replaced and does not resume.
 
+### Subagents
+
+Subagents allow an active agent to **invoke another agent as a tool** for a
+scoped task, receive its output, and **resume its own workflow** — all without
+changing identity or losing context. This is the call-and-return pattern,
+distinct from the permanent handoff of `switch_agent`.
+
+#### Declaring a Subagent
+
+Mark an agent as invocable as a subagent by adding `subagent: true` to its
+YAML frontmatter. You can optionally declare additional tool parameters
+via `tool_schema`:
+
+```markdown
+---
+description: "Reviews code and architecture decisions for risks"
+subagent: true
+tool_schema:
+  - name: files_to_review
+    type: string
+    description: "Comma-separated list of file paths to review"
+    required: false
+---
+
+You are a code reviewer. Your role is to identify risks, suggest improvements,
+and evaluate trade-offs in software architecture and implementation.
+```
+
+When `subagent: true` is present, the extension automatically registers a
+tool named `invoke_{agent-name}` (override with `tool_name`). The tool
+always accepts a `goal` parameter, plus any custom parameters declared in
+`tool_schema`.
+
+#### Invoking a Subagent
+
+The active agent calls the subagent like any other tool:
+
+```tool
+invoke_reviewer(goal="Review this architecture decision. Do you see any risks?")
+```
+
+The subagent spawns in an isolated `pi --mode rpc` process with its own
+system prompt, executes the scoped goal (including any tool calls it needs,
+such as `read` or `bash`), and returns its final response as a tool result.
+The caller agent's identity, session, and history are completely unchanged.
+
+**Example scenario:**
+
+The **Planner** agent is designing a system and wants the **Reviewer** to
+critique a specific decision:
+
+> "Before I commit to this approach, let me get a second opinion."
+> ```tool
+> invoke_reviewer(
+>   goal="Review this architecture: we will use PostgreSQL for the primary store and Redis for caching. What are the operational risks?"
+> )
+> ```
+
+The Reviewer runs in its own process, analyzes the architecture, and
+returns feedback. The Planner receives the result and continues planning.
+
+#### Guardrails
+
+- **Self-invocation prevention**: An agent cannot invoke itself as a subagent.
+- **Depth limit**: Subagent nesting is limited to 3 levels. Deeper nesting
+  returns an error.
+- **Timeout**: Subagent RPC processes are killed after a configurable timeout
+  (default 60 seconds). Pass `--subagent-timeout <ms>` to override.
+- **Max turns**: Subagents are limited to a configurable number of turns
+  (default 5). Pass `--subagent-max-turns <n>` to override.
+
 ### Session Persistence
 
 The active agent is persisted in the session file and restored when you:

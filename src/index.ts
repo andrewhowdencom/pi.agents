@@ -6,9 +6,24 @@ import type { AgentDefinition } from "./agent-discovery.js";
 import { discoverAgents, clearAgentCache } from "./agent-discovery.js";
 import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
+import { buildSubagentToolSchema, executeSubagent } from "./subagent-tools.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 
 export default function (pi: ExtensionAPI) {
   let activeAgentName: string | undefined;
+  const registeredSubagentTools = new Set<string>();
+  const MAX_SUBAGENT_DEPTH = 3;
+  const subagentStorage = new AsyncLocalStorage<{ depth: number }>();
+
+  function getSubagentDepth(): number {
+    const store = subagentStorage.getStore();
+    return store?.depth ?? 0;
+  }
+
+  function withSubagentDepth<T>(fn: () => Promise<T>): Promise<T> {
+    const currentDepth = getSubagentDepth();
+    return subagentStorage.run({ depth: currentDepth + 1 }, fn);
+  }
 
   function updateAgentStatus(ctx: ExtensionContext, name: string | undefined) {
     if (ctx.hasUI) {
@@ -28,11 +43,114 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  function registerSubagentTools(agents: AgentDefinition[]) {
+    for (const agent of agents) {
+      if (!agent.subagent || !agent.toolName) continue;
+
+      if (registeredSubagentTools.has(agent.toolName)) continue;
+
+      if (agent.toolName === "switch_agent") {
+        console.warn(
+          `[pi-agents] Subagent tool name "${agent.toolName}" collides with switch_agent, skipping`,
+        );
+        continue;
+      }
+
+      registeredSubagentTools.add(agent.toolName);
+
+      const schema = buildSubagentToolSchema(agent);
+
+      pi.registerTool({
+        name: agent.toolName,
+        label: `Invoke ${agent.name}`,
+        description:
+          agent.description || `Invoke ${agent.name} as a subagent`,
+        promptSnippet: `Invoke the ${agent.name} subagent with a scoped goal`,
+        promptGuidelines: [
+          `Use ${agent.toolName} when you need the ${agent.name} agent to perform a specific, scoped task and return its output. The caller agent will resume after the subagent completes.`,
+        ],
+        parameters: schema,
+        async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+          // Self-invocation guardrail
+          if (activeAgentName === agent.name) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Cannot invoke subagent ${agent.name} because it is the currently active agent.`,
+                },
+              ],
+              details: {},
+              isError: true,
+            };
+          }
+
+          // Depth limit guardrail
+          const depth = getSubagentDepth();
+          if (depth >= MAX_SUBAGENT_DEPTH) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Subagent depth limit (${MAX_SUBAGENT_DEPTH}) exceeded. Cannot nest deeper than ${MAX_SUBAGENT_DEPTH} levels.`,
+                },
+              ],
+              details: { currentDepth: depth },
+              isError: true,
+            };
+          }
+
+          const timeoutMs =
+            parseInt(
+              (pi.getFlag("subagent-timeout") as string | undefined) ??
+                "60000",
+              10,
+            ) || 60000;
+          const maxTurns =
+            parseInt(
+              (pi.getFlag("subagent-max-turns") as string | undefined) ?? "5",
+              10,
+            ) || 5;
+
+          const result = await withSubagentDepth(() =>
+            executeSubagent(agent, params, signal, timeoutMs, maxTurns),
+          );
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: result.output,
+              },
+            ],
+            details: {
+              turnCount: result.turnCount,
+              timedOut: result.timedOut,
+              subagentDepth: depth + 1,
+            },
+          };
+        },
+      });
+    }
+  }
+
   // --- Task 3: Register CLI flag for agent switch confirmation ---
   pi.registerFlag("agent-switch-confirm", {
     description: "Confirm before agent-initiated agent switches",
     type: "boolean",
     default: true,
+  });
+
+  pi.registerFlag("subagent-timeout", {
+    description: "Default timeout in milliseconds for subagent RPC execution",
+    type: "string",
+    default: "60000",
+  });
+
+  pi.registerFlag("subagent-max-turns", {
+    description: "Maximum turns a subagent can execute before being forcibly stopped",
+    type: "string",
+    default: "5",
   });
 
   // --- Task 3: Active Agent State Persistence ---
@@ -59,6 +177,9 @@ export default function (pi: ExtensionAPI) {
       activeAgentName = undefined;
       updateAgentStatus(ctx, undefined);
     }
+
+    const agents = await discoverAgents(pi, ctx.cwd);
+    registerSubagentTools(agents);
   });
 
   // --- Task 6: Inject Active Agent System Instructions ---
@@ -76,6 +197,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     clearAgentCache();
+    registeredSubagentTools.clear();
   });
 
   // --- Task 4: /agent Command and Visual Mode Switching ---
