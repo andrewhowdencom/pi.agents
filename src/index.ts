@@ -100,7 +100,7 @@ export default function (pi: ExtensionAPI) {
             };
           }
 
-          const maxTurns = agent.maxTurns ?? 5;
+          const maxTurns = agent.maxTurns ?? 30;
 
           if (ctx.hasUI) {
             ctx.ui.setWorkingMessage(`Invoking ${agent.name}...`);

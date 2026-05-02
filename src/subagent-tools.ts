@@ -67,7 +67,7 @@ export async function executeSubagent(
   onUpdate?: SubagentUpdateCallback,
 ): Promise<{ output: string; turnCount: number; timedOut: boolean; usage?: AccumulatedUsage }> {
   const timeoutMs = agent.timeout ?? 60000;
-  const maxTurns = agent.maxTurns ?? 5;
+  const maxTurns = agent.maxTurns ?? 30;
   // Compose the prompt from goal + toolSchema params
   const goal = String(params.goal ?? "");
   let prompt = goal;
