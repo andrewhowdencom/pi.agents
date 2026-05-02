@@ -63,6 +63,12 @@ export interface AgentDefinition {
   toolName?: string;
   /** Additional tool parameters beyond the default `goal` */
   toolSchema?: ToolParameter[];
+  /** LLM model for this subagent (e.g. "anthropic/claude-sonnet-4") */
+  model?: string;
+  /** RPC timeout in milliseconds (default: 60000) */
+  timeout?: number;
+  /** Maximum turns before forcible stop (default: 5) */
+  maxTurns?: number;
 }
 
 /** Module-level cache for discovered agents within a session. */
@@ -149,6 +155,33 @@ export async function discoverAgents(
             ? frontmatter.tool_name
             : `invoke_${agentName.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
+        const model =
+          typeof frontmatter.model === "string" && frontmatter.model
+            ? frontmatter.model
+            : undefined;
+
+        let timeout: number | undefined;
+        if (typeof frontmatter.timeout === "number") {
+          timeout = frontmatter.timeout;
+        } else if (
+          typeof frontmatter.timeout === "string" &&
+          frontmatter.timeout
+        ) {
+          const parsed = parseInt(frontmatter.timeout, 10);
+          timeout = isNaN(parsed) ? undefined : parsed;
+        }
+
+        let maxTurns: number | undefined;
+        if (typeof frontmatter.max_turns === "number") {
+          maxTurns = frontmatter.max_turns;
+        } else if (
+          typeof frontmatter.max_turns === "string" &&
+          frontmatter.max_turns
+        ) {
+          const parsed = parseInt(frontmatter.max_turns, 10);
+          maxTurns = isNaN(parsed) ? undefined : parsed;
+        }
+
         let toolSchema: ToolParameter[] | undefined;
         if (
           Array.isArray(frontmatter.tool_schema) &&
@@ -184,6 +217,9 @@ export async function discoverAgents(
           subagent,
           toolName,
           toolSchema,
+          model,
+          timeout,
+          maxTurns,
         });
       } catch (err) {
         console.error(

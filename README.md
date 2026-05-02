@@ -219,6 +219,9 @@ via `tool_schema`:
 ---
 description: "Reviews code and architecture decisions for risks"
 subagent: true
+model: anthropic/claude-sonnet-4
+timeout: 30000
+max_turns: 3
 tool_schema:
   - name: files_to_review
     type: string
@@ -234,6 +237,14 @@ When `subagent: true` is present, the extension automatically registers a
 tool named `invoke_{agent-name}` (override with `tool_name`). The tool
 always accepts a `goal` parameter, plus any custom parameters declared in
 `tool_schema`.
+
+**Per-agent execution configuration:**
+
+| Frontmatter field | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | *(pi default)* | LLM model for this subagent (e.g. `anthropic/claude-sonnet-4`, `openai/gpt-4.1`). Passed as `--model` to the subagent's RPC process. |
+| `timeout` | number/string | `60000` | RPC timeout in milliseconds. The subagent process is killed if it exceeds this. |
+| `max_turns` | number/string | `5` | Maximum turns before the subagent is forcibly stopped. |
 
 #### Invoking a Subagent
 
@@ -270,10 +281,10 @@ receives the final result and continues planning.
 - **Self-invocation prevention**: An agent cannot invoke itself as a subagent.
 - **Depth limit**: Subagent nesting is limited to 3 levels. Deeper nesting
   returns an error.
-- **Timeout**: Subagent RPC processes are killed after a configurable timeout
-  (default 60 seconds). Pass `--subagent-timeout <ms>` to override.
-- **Max turns**: Subagents are limited to a configurable number of turns
-  (default 5). Pass `--subagent-max-turns <n>` to override.
+- **Timeout**: Subagent RPC processes are killed after the per-agent timeout
+  configured via the `timeout` frontmatter field (default 60 seconds).
+- **Max turns**: Subagents are limited to the per-agent turn count configured
+  via the `max_turns` frontmatter field (default 5).
 
 #### Live Progress and Cost Tracking
 

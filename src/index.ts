@@ -100,17 +100,7 @@ export default function (pi: ExtensionAPI) {
             };
           }
 
-          const timeoutMs =
-            parseInt(
-              (pi.getFlag("subagent-timeout") as string | undefined) ??
-                "60000",
-              10,
-            ) || 60000;
-          const maxTurns =
-            parseInt(
-              (pi.getFlag("subagent-max-turns") as string | undefined) ?? "5",
-              10,
-            ) || 5;
+          const maxTurns = agent.maxTurns ?? 5;
 
           if (ctx.hasUI) {
             ctx.ui.setWorkingMessage(`Invoking ${agent.name}...`);
@@ -143,8 +133,6 @@ export default function (pi: ExtensionAPI) {
               agent,
               params,
               signal,
-              timeoutMs,
-              maxTurns,
               onSubagentUpdate,
             ),
           );
@@ -179,17 +167,7 @@ export default function (pi: ExtensionAPI) {
     default: true,
   });
 
-  pi.registerFlag("subagent-timeout", {
-    description: "Default timeout in milliseconds for subagent RPC execution",
-    type: "string",
-    default: "60000",
-  });
 
-  pi.registerFlag("subagent-max-turns", {
-    description: "Maximum turns a subagent can execute before being forcibly stopped",
-    type: "string",
-    default: "5",
-  });
 
   // --- Task 3: Active Agent State Persistence ---
   pi.on("session_start", async (_event, ctx) => {

@@ -64,10 +64,10 @@ export async function executeSubagent(
   agent: AgentDefinition,
   params: Record<string, unknown>,
   signal: AbortSignal,
-  timeoutMs: number,
-  maxTurns: number,
   onUpdate?: SubagentUpdateCallback,
 ): Promise<{ output: string; turnCount: number; timedOut: boolean; usage?: AccumulatedUsage }> {
+  const timeoutMs = agent.timeout ?? 60000;
+  const maxTurns = agent.maxTurns ?? 5;
   // Compose the prompt from goal + toolSchema params
   const goal = String(params.goal ?? "");
   let prompt = goal;
@@ -87,13 +87,17 @@ export async function executeSubagent(
   );
   await writeFile(tempPath, agent.content, "utf-8");
 
-  const client = new PiRpcClient([
+  const args = [
     "--mode",
     "rpc",
     "--system-prompt",
     tempPath,
     "--no-session",
-  ]);
+  ];
+  if (agent.model) {
+    args.push("--model", agent.model);
+  }
+  const client = new PiRpcClient(args);
 
   let timedOut = false;
   let output = "";
