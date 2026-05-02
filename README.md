@@ -146,6 +146,62 @@ Example:
 > compaction automatically trims older context as it grows, and you can always
 > start a fresh Pi session if a completely clean break is needed.
 
+### Autonomous Agent Handoff
+
+Agents can autonomously hand off control to another agent by calling the
+`switch_agent` tool. This eliminates the need for human intervention at every
+workflow transition.
+
+When an agent finishes its role, it can call:
+
+```tool
+switch_agent(agent="builder")
+```
+
+**Tool parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `agent` | Yes | Name of the target agent to switch to |
+| `style` | No | `"lightweight"` (default) or `"summarize"` (not yet implemented) |
+
+**Guardrails:**
+
+- **Discovery validation**: The target agent must be discovered from the
+  `agents/` directories. Unknown agents are rejected with a list of available
+  agents.
+- **Self-switch prevention**: An agent cannot switch to itself. The tool
+  returns an error if the target is already the active agent.
+- **User confirmation**: By default, the user is prompted to confirm the handoff:
+  `"planner wants to switch to builder. Allow?"`. Denying it aborts the switch
+  and the current agent continues.
+- **Non-interactive mode**: In print/JSON mode (`-p`, `--mode json`), confirmation
+  is skipped and the switch proceeds automatically.
+- **Flag override**: Pass `--agent-switch-confirm false` to disable confirmation
+  in interactive mode.
+
+**Example scenario:**
+
+The Planner agent finishes architectural planning and decides the Builder should
+implement the plan:
+
+> "The architecture looks solid. I'll hand this off to the Builder to implement."
+> ```tool
+> switch_agent(agent="builder")
+> ```
+
+Pi confirms with the user, then updates the active agent. On the next turn, the
+Builder's system prompt is injected via `before_agent_start` and the Builder
+continues from the full conversation history.
+
+**Distinction from `/agent`**: The `/agent` command is user-initiated. The
+`switch_agent` tool is agent-initiated. Both converge on the same
+`setActiveAgent()` path.
+
+**Distinction from subagents** (Issue #3): Subagents are a call-and-return
+pattern — the caller resumes after the subagent finishes. `switch_agent` is a
+permanent transfer — the caller agent is replaced and does not resume.
+
 ### Session Persistence
 
 The active agent is persisted in the session file and restored when you:
@@ -180,7 +236,9 @@ restores the active agent, updating the status bar.
 
 ### Agent Switching
 
-Agent switching is a same-session operation. When the user runs `/agent <name>`:
+Agent switching is a same-session operation. It can be initiated by the user via
+`/agent <name>` or by the active agent via the `switch_agent` tool. Both paths
+converge on the same `setActiveAgent()` helper:
 
 1. The module-level `activeAgentName` is updated
 2. The status bar is updated to show the new agent

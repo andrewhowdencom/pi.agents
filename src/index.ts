@@ -4,6 +4,8 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import type { AgentDefinition } from "./agent-discovery.js";
 import { discoverAgents, clearAgentCache } from "./agent-discovery.js";
+import { Type } from "typebox";
+import { StringEnum } from "@mariozechner/pi-ai";
 
 export default function (pi: ExtensionAPI) {
   let activeAgentName: string | undefined;
@@ -25,6 +27,13 @@ export default function (pi: ExtensionAPI) {
       pi.appendEntry("agent-state", { name });
     }
   }
+
+  // --- Task 3: Register CLI flag for agent switch confirmation ---
+  pi.registerFlag("agent-switch-confirm", {
+    description: "Confirm before agent-initiated agent switches",
+    type: "boolean",
+    default: true,
+  });
 
   // --- Task 3: Active Agent State Persistence ---
   pi.on("session_start", async (_event, ctx) => {
@@ -126,6 +135,121 @@ export default function (pi: ExtensionAPI) {
 
       setActiveAgent(ctx, selectedAgent.name);
       ctx.ui.notify(`Agent set to ${selectedAgent.name}`, "info");
+    },
+  });
+
+  // --- Task 1: switch_agent tool for autonomous agent handoff ---
+  pi.registerTool({
+    name: "switch_agent",
+    label: "Switch Agent",
+    description: "Permanently transfer control to a different agent.",
+    promptSnippet: "Switch to another agent to continue the workflow",
+    promptGuidelines: [
+      "Use switch_agent when you have completed your role and another agent should take over.",
+    ],
+    parameters: Type.Object({
+      agent: Type.String({
+        description: "Name of the target agent to switch to",
+      }),
+      style: Type.Optional(
+        StringEnum(["lightweight", "summarize"] as const),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      try {
+        // Validate style
+        if (params.style === "summarize") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "Summarize style is not yet supported. Use 'lightweight' for same-session switching.",
+              },
+            ],
+            details: {},
+            isError: true,
+          };
+        }
+
+        // Discover available agents
+        const agents = await discoverAgents(pi, ctx.cwd);
+
+        // Validate target exists
+        const targetAgent = agents.find((a) => a.name === params.agent);
+        if (!targetAgent) {
+          const availableAgents = agents.map((a) => a.name).join(", ");
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Agent "${params.agent}" not found. Available agents: ${availableAgents || "none"}.`,
+              },
+            ],
+            details: { availableAgents },
+            isError: true,
+          };
+        }
+
+        // Prevent self-switch
+        if (activeAgentName === params.agent) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Already using agent ${params.agent}. Switch to a different agent.`,
+              },
+            ],
+            details: {},
+            isError: true,
+          };
+        }
+
+        // User confirmation (guardrail)
+        const confirmSwitches = pi.getFlag("agent-switch-confirm") ?? true;
+        if (ctx.hasUI && confirmSwitches) {
+          const currentAgentLabel = activeAgentName || "default";
+          const ok = await ctx.ui.confirm(
+            "Agent Handoff",
+            `${currentAgentLabel} wants to switch to ${params.agent}. Allow?`,
+          );
+          if (!ok) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Agent switch denied by user.",
+                },
+              ],
+              details: {},
+              isError: true,
+            };
+          }
+        }
+
+        // Perform the switch
+        setActiveAgent(ctx, params.agent);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Switched to agent ${params.agent}.`,
+            },
+          ],
+          details: {},
+        };
+      } catch (err) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Error during agent switch: ${err instanceof Error ? err.message : String(err)}`,
+            },
+          ],
+          details: {},
+          isError: true,
+        };
+      }
     },
   });
 }
