@@ -70,7 +70,7 @@ export default function (pi: ExtensionAPI) {
           `Use ${agent.toolName} when you need the ${agent.name} agent to perform a specific, scoped task and return its output. The caller agent will resume after the subagent completes.`,
         ],
         parameters: schema,
-        async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+        async execute(_toolCallId, params, signal, onUpdate, ctx) {
           // Self-invocation guardrail
           if (activeAgentName === agent.name) {
             return {
@@ -112,9 +112,46 @@ export default function (pi: ExtensionAPI) {
               10,
             ) || 5;
 
+          if (ctx.hasUI) {
+            ctx.ui.setWorkingMessage(`Invoking ${agent.name}...`);
+          }
+
+          const onSubagentUpdate = (partial: {
+            content: Array<{ type: "text"; text: string }>;
+            details: unknown;
+            terminate?: boolean;
+          }) => {
+            onUpdate?.(partial);
+            if (ctx.hasUI) {
+              const details = partial.details as {
+                turnCount?: number;
+                maxTurns?: number;
+                usage?: { cost?: { total?: number } };
+              } | undefined;
+              const turn = details?.turnCount ?? 0;
+              const total = details?.maxTurns ?? maxTurns;
+              const cost = details?.usage?.cost?.total ?? 0;
+              const costText = cost > 0 ? `, ~$${cost.toFixed(4)}` : "";
+              ctx.ui.setWorkingMessage(
+                `${agent.name}: turn ${turn}/${total}${costText}`,
+              );
+            }
+          };
+
           const result = await withSubagentDepth(() =>
-            executeSubagent(agent, params, signal, timeoutMs, maxTurns),
+            executeSubagent(
+              agent,
+              params,
+              signal,
+              timeoutMs,
+              maxTurns,
+              onSubagentUpdate,
+            ),
           );
+
+          if (ctx.hasUI) {
+            ctx.ui.setWorkingMessage();
+          }
 
           return {
             content: [
@@ -127,6 +164,7 @@ export default function (pi: ExtensionAPI) {
               turnCount: result.turnCount,
               timedOut: result.timedOut,
               subagentDepth: depth + 1,
+              usage: result.usage,
             },
           };
         },

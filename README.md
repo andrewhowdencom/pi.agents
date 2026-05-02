@@ -261,7 +261,9 @@ critique a specific decision:
 > ```
 
 The Reviewer runs in its own process, analyzes the architecture, and
-returns feedback. The Planner receives the result and continues planning.
+returns feedback. Each completed turn's output is streamed back to the parent
+session in real time, so you can watch the subagent's progress. The Planner
+receives the final result and continues planning.
 
 #### Guardrails
 
@@ -272,6 +274,39 @@ returns feedback. The Planner receives the result and continues planning.
   (default 60 seconds). Pass `--subagent-timeout <ms>` to override.
 - **Max turns**: Subagents are limited to a configurable number of turns
   (default 5). Pass `--subagent-max-turns <n>` to override.
+
+#### Live Progress and Cost Tracking
+
+While a subagent is running, its output is streamed back to the parent
+session after each completed turn. You can see the subagent's reasoning
+and tool calls as they happen, rather than waiting for the entire execution
+to finish.
+
+The tool result `details` include:
+
+| Field | Description |
+|---|---|
+| `turnCount` | Number of turns the subagent executed |
+| `timedOut` | Whether the subagent hit the timeout limit |
+| `subagentDepth` | Nesting depth of this subagent invocation |
+| `usage` | Cumulative token usage and cost across all turns |
+
+The `usage` object contains:
+
+| Field | Description |
+|---|---|
+| `input` | Total input tokens consumed |
+| `output` | Total output tokens consumed |
+| `cacheRead` | Total cache-read tokens |
+| `cacheWrite` | Total cache-write tokens |
+| `totalTokens` | Total tokens (input + output + cache) |
+| `cost.total` | Estimated total cost in USD |
+
+**Known limitation**: Subagent costs are tracked independently and are **not**
+merged into the parent session's built-in cost totals. The subagent runs in a
+separate `pi --mode rpc` process, and Pi does not expose an API to inject
+external usage data into the parent's `SessionStats`. The `usage` field in the
+tool result details provides the complete subagent cost breakdown.
 
 ### Session Persistence
 
