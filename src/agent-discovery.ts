@@ -35,6 +35,18 @@ function getAgentSearchPaths(cwd: string): SearchPath[] {
   ];
 }
 
+/** Parameter declaration for a subagent tool schema. */
+export interface ToolParameter {
+  /** Parameter name */
+  name: string;
+  /** Parameter type */
+  type: "string" | "number" | "boolean";
+  /** Human-readable description for the LLM */
+  description: string;
+  /** Whether the parameter is required */
+  required?: boolean;
+}
+
 /** Represents a discovered agent definition from an agent file. */
 export interface AgentDefinition {
   /** Agent name (e.g., "planner") */
@@ -45,6 +57,12 @@ export interface AgentDefinition {
   description: string;
   /** Markdown body (frontmatter stripped) capturing the agent's role */
   content: string;
+  /** Whether this agent can be invoked as a subagent tool */
+  subagent?: boolean;
+  /** Override for the generated tool name (default: invoke_{kebab-case name}) */
+  toolName?: string;
+  /** Additional tool parameters beyond the default `goal` */
+  toolSchema?: ToolParameter[];
 }
 
 /** Module-level cache for discovered agents within a session. */
@@ -123,11 +141,49 @@ export async function discoverAgents(
             ? frontmatter.description
             : "";
 
+        const subagent =
+          frontmatter.subagent === true || frontmatter.subagent === "true";
+
+        const toolName =
+          typeof frontmatter.tool_name === "string" && frontmatter.tool_name
+            ? frontmatter.tool_name
+            : `invoke_${agentName.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+
+        let toolSchema: ToolParameter[] | undefined;
+        if (
+          Array.isArray(frontmatter.tool_schema) &&
+          frontmatter.tool_schema.every(
+            (p: unknown) =>
+              typeof p === "object" &&
+              p !== null &&
+              "name" in p &&
+              typeof (p as Record<string, unknown>).name === "string" &&
+              "type" in p &&
+              typeof (p as Record<string, unknown>).type === "string" &&
+              "description" in p &&
+              typeof (p as Record<string, unknown>).description === "string",
+          )
+        ) {
+          toolSchema = (frontmatter.tool_schema as ToolParameter[]).map(
+            (p) => ({
+              name: p.name,
+              type: ["string", "number", "boolean"].includes(p.type)
+                ? p.type
+                : "string",
+              description: p.description,
+              required: p.required === true,
+            }),
+          );
+        }
+
         agentsByName.set(agentName, {
           name: agentName,
           path: filePath,
           description,
           content: body,
+          subagent,
+          toolName,
+          toolSchema,
         });
       } catch (err) {
         console.error(
