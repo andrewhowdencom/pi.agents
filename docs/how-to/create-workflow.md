@@ -42,6 +42,15 @@ steps:
 **Linear step behavior:** The agent performs its task; the engine automatically
 advances to the next step when the agent finishes.
 
+> **Initial prompts:** You can pass a custom prompt when starting a workflow:
+> ```
+> /workflow plan-build "Design a REST API for managing todo lists"
+> ```
+> The initial text is appended to the first step's `prompt`. If the first step
+> has no `prompt`, the initial text becomes the entire message. This makes
+> workflows reusable — the same workflow YAML can be used for different tasks
+> by varying the initial prompt.
+
 ## Step 3: Add a Conditional Step
 
 Add a review step where the agent must explicitly choose what happens next:

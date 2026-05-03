@@ -314,7 +314,7 @@ export default function (pi: ExtensionAPI) {
       // Dynamic tool activation
       const allTools = pi.getActiveTools();
       if (!originalToolSet) {
-        originalToolSet = [...allTools];
+        originalToolSet = [...allTools].filter((t) => t !== "workflow_signal");
       }
 
       const targetTools = new Set(originalToolSet);
@@ -335,6 +335,14 @@ export default function (pi: ExtensionAPI) {
       }
 
       pi.setActiveTools([...targetTools]);
+    } else {
+      // Not in a workflow — ensure workflow-specific tools are hidden
+      const activeTools = pi.getActiveTools();
+      const filtered = activeTools.filter((t) => t !== "workflow_signal");
+      if (filtered.length !== activeTools.length) {
+        pi.setActiveTools(filtered);
+      }
+      originalToolSet = null;
     }
 
     return { systemPrompt };
@@ -599,7 +607,7 @@ export default function (pi: ExtensionAPI) {
           const choice = await showWorkflowPicker(ctx);
           if (choice) {
             // Start the selected workflow
-            await startWorkflowByName(choice, ctx);
+            await startWorkflowByName(choice, "", ctx);
           }
         }
         return;
@@ -679,7 +687,7 @@ export default function (pi: ExtensionAPI) {
           case "list": {
             const choice = await showWorkflowPicker(ctx);
             if (choice) {
-              await startWorkflowByName(choice, ctx);
+              await startWorkflowByName(choice, "", ctx);
             }
             return;
           }
@@ -687,12 +695,13 @@ export default function (pi: ExtensionAPI) {
       }
 
       // Start workflow by name
-      const workflowName = trimmed;
-      await startWorkflowByName(workflowName, ctx);
+      const workflowName = parts[0];
+      const initialPrompt = parts.slice(1).join(" ").trim();
+      await startWorkflowByName(workflowName, initialPrompt, ctx);
     },
   });
 
-  async function startWorkflowByName(workflowName: string, ctx: ExtensionContext) {
+  async function startWorkflowByName(workflowName: string, initialPrompt: string, ctx: ExtensionContext) {
     const workflows = await discoverWorkflows(pi, ctx.cwd);
     const workflow = workflows.find((w) => w.name === workflowName);
 
@@ -736,7 +745,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     engine.start(workflow.definition);
-    originalToolSet = pi.getActiveTools();
+    originalToolSet = pi.getActiveTools().filter((t) => t !== "workflow_signal");
 
     // Validate agents
     const agents = await discoverAgents(pi, ctx.cwd);
@@ -764,8 +773,14 @@ export default function (pi: ExtensionAPI) {
       "info",
     );
 
-    const prompt =
-      (firstStep as any).prompt || "Begin the workflow.";
+    let prompt = (firstStep as any).prompt || "Begin the workflow.";
+    if (initialPrompt) {
+      if (prompt) {
+        prompt += "\n\n" + initialPrompt;
+      } else {
+        prompt = initialPrompt;
+      }
+    }
     pi.sendUserMessage(prompt, { deliverAs: "steer" });
   }
 
@@ -804,7 +819,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       engine.startChain(agentNames);
-      originalToolSet = pi.getActiveTools();
+      originalToolSet = pi.getActiveTools().filter((t) => t !== "workflow_signal");
       engine.persist(pi);
 
       const firstAgent = agentNames[0];

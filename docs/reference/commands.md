@@ -28,6 +28,7 @@ Manage multi-agent workflows.
 |---|---|
 | `/workflow` | Show status if active; otherwise show workflow picker |
 | `/workflow <name>` | Start a workflow by name |
+| `/workflow <name> [prompt]` | Start a workflow by name with an optional initial prompt |
 | `/workflow list` | Show picker with available workflows |
 | `/workflow pause` | Pause the current workflow |
 | `/workflow resume` | Resume a paused workflow |
@@ -37,11 +38,16 @@ Manage multi-agent workflows.
 **Examples:**
 
 ```
-/workflow plan-build-review  # Start workflow
-/workflow pause              # Pause
-/workflow resume             # Resume
-/workflow abort              # Abort
+/workflow plan-build-review                      # Start workflow
+/workflow plan-build-review Build a REST API    # Start with initial prompt
+/workflow pause                                  # Pause
+/workflow resume                                 # Resume
+/workflow abort                                  # Abort
 ```
+
+When an initial prompt is provided, it is appended to the first step's
+hardcoded `prompt` (if any). If the first step has no `prompt`, the initial
+text becomes the entire message.
 
 ### `/chain`
 
