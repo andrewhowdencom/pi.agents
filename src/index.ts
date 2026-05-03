@@ -204,7 +204,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerFlag("workflow-confirm", {
     description: "Confirm before starting a workflow",
     type: "boolean",
-    default: true,
+    default: false,
   });
 
   // --- Event handlers ---
@@ -754,14 +754,7 @@ export default function (pi: ExtensionAPI) {
       "info",
     );
 
-    let prompt = (firstStep as any).prompt || "Begin the workflow.";
-    if (initialPrompt) {
-      if (prompt) {
-        prompt += "\n\n" + initialPrompt;
-      } else {
-        prompt = initialPrompt;
-      }
-    }
+    const prompt = initialPrompt || (firstStep as any).prompt || "Begin the workflow.";
     pi.sendUserMessage(prompt, { deliverAs: "steer" });
   }
 

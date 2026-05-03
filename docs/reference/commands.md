@@ -125,7 +125,7 @@ workflow_signal(signal="changes_needed", feedback="Add more tests")
 | Flag | Type | Default | Description |
 |---|---|---|---|
 | `--agent-switch-confirm` | boolean | `true` | Confirm before agent-initiated agent switches |
-| `--workflow-confirm` | boolean | `true` | Confirm before starting a workflow |
+| `--workflow-confirm` | boolean | `false` | Confirm before starting a workflow |
 
 ## Reserved Keywords
 

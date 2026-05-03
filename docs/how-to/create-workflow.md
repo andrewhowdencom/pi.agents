@@ -46,10 +46,15 @@ advances to the next step when the agent finishes.
 > ```
 > /workflow plan-build "Design a REST API for managing todo lists"
 > ```
-> The initial text is appended to the first step's `prompt`. If the first step
-> has no `prompt`, the initial text becomes the entire message. This makes
-> workflows reusable — the same workflow YAML can be used for different tasks
-> by varying the initial prompt.
+> The initial text **replaces** the first step's hardcoded `prompt`. If you do
+> not provide an initial prompt, the hardcoded `prompt` is used instead. If
+> the first step has no `prompt` at all, the default message
+> `"Begin the workflow."` is sent.
+>
+> This makes workflows reusable — the same workflow YAML can be used for
+> different tasks by varying the initial prompt. The hardcoded `prompt` acts
+> as a sensible default when the user starts the workflow without additional
+> input.
 
 ## Step 3: Add a Conditional Step
 
