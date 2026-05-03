@@ -53,6 +53,8 @@ export interface WorkflowState {
   status: "running" | "paused" | "completed" | "aborted";
   pendingTransition?: { signal: string; feedback?: string };
   retryCount?: number;
+  /** Set to true by resume() so the next advance() skips past a pause step. */
+  resumedFromPause?: boolean;
   /** ID of the chain if this is an ad-hoc /chain workflow */
   chainId?: string;
 }
@@ -173,7 +175,7 @@ export function validateWorkflowGraph(
     const step = stepMap.get(current);
     if (!step) continue;
 
-    if (isLinearStep(step)) {
+    if (isLinearStep(step) || isPauseStep(step)) {
       const nextId = getNextLinearStep(definition, current);
       if (nextId) queue.push(nextId);
     } else if (isConditionalStep(step)) {
@@ -198,7 +200,7 @@ export function validateWorkflowGraph(
         step.id,
         Object.values(step.transitions).map((tx) => tx.target),
       );
-    } else if (isLinearStep(step)) {
+    } else if (isLinearStep(step) || isPauseStep(step)) {
       const nextId = getNextLinearStep(definition, step.id);
       if (nextId) {
         adj.set(step.id, [nextId]);

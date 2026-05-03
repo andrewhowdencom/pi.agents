@@ -146,12 +146,22 @@ export class WorkflowEngine {
       return { type: "error", message: "Current step not found in workflow definition" };
     }
 
+    // Check if we were just resumed from a pause step
+    const wasResumedFromPause = this.currentWorkflow.resumedFromPause;
+    if (wasResumedFromPause) {
+      delete this.currentWorkflow.resumedFromPause;
+    }
+
     let nextStepId: string | null = null;
 
-    // Pause step: just stop and wait for user
+    // Pause step: stop and wait for user, or advance if just resumed
     if (isPauseStep(currentStep)) {
-      this.currentWorkflow.status = "paused";
-      return { type: "needs-intervention", availableTransitions: [] };
+      if (wasResumedFromPause) {
+        nextStepId = getNextLinearStep(this.currentDefinition, currentStep.id);
+      } else {
+        this.currentWorkflow.status = "paused";
+        return { type: "needs-intervention", availableTransitions: [] };
+      }
     }
 
     // Linear step: next by index
@@ -254,6 +264,7 @@ export class WorkflowEngine {
     if (this.currentWorkflow && this.currentWorkflow.status === "paused") {
       this.currentWorkflow.status = "running";
       this.currentWorkflow.retryCount = 0;
+      this.currentWorkflow.resumedFromPause = true;
     }
   }
 
