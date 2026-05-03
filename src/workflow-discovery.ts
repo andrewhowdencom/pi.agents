@@ -161,8 +161,8 @@ function validateStep(
 }
 
 /**
- * Discovers workflow definitions from .pi/workflows/*.yml and
- * ~/.pi/agent/workflows/*.yml.
+ * Discovers workflow definitions from .pi/workflows/*.yml and *.yaml,
+ * and ~/.pi/agent/workflows/*.yml and *.yaml.
  *
  * Parses YAML, validates basic structure, and skips files with reserved names.
  * Agent existence validation is done separately at workflow start time.
@@ -187,11 +187,11 @@ export async function discoverWorkflows(
     }
 
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".yml")) {
+      if (!entry.isFile() || !(entry.name.endsWith(".yml") || entry.name.endsWith(".yaml"))) {
         continue;
       }
 
-      const workflowName = entry.name.slice(0, -4); // strip .yml
+      const workflowName = entry.name.replace(/\.ya?ml$/, ""); // strip .yml or .yaml
 
       if (isReservedWorkflowName(workflowName)) {
         console.warn(

@@ -2,8 +2,8 @@
 
 Workflow files use YAML syntax and are discovered from:
 
-- `.pi/workflows/*.yml` (project-local, takes precedence)
-- `~/.pi/agent/workflows/*.yml` (global)
+- `.pi/workflows/*.yml` and `*.yaml` (project-local, takes precedence)
+- `~/.pi/agent/workflows/*.yml` and `*.yaml` (global)
 
 Files use their basename (without `.yml`) as the workflow name.
 

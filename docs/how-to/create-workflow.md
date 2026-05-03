@@ -14,7 +14,7 @@ covers how to write, validate, and test workflow definitions.
 mkdir -p .pi/workflows
 ```
 
-Workflows can also be defined globally in `~/.pi/agent/workflows/*.yml`.
+Workflows can also be defined globally in `~/.pi/agent/workflows/*.yml` or `~/.pi/agent/workflows/*.yaml`.
 Project-local workflows take precedence when names collide — the same rule as
 agents.
 

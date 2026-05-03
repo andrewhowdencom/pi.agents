@@ -1,8 +1,8 @@
 /**
  * Workflow graph type definitions for declarative multi-agent execution pipelines.
  *
- * Workflows are defined as YAML files in .pi/workflows/*.yml and
- * ~/.pi/agent/workflows/*.yml. The engine executes them as a state machine
+ * Workflows are defined as YAML files in .pi/workflows/*.yml, *.yaml, and
+ * ~/.pi/agent/workflows/*.yml, *.yaml. The engine executes them as a state machine
  * with support for linear auto-transitions, conditional tool-call-driven
  * transitions, pause steps, and subagent composition.
  */
