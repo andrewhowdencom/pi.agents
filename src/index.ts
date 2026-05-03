@@ -406,18 +406,7 @@ export default function (pi: ExtensionAPI) {
           if (ctx.hasUI) {
             const choice = await ctx.ui.select(
               "Workflow paused — select next step:",
-              result.availableTransitions.map((t) => {
-                const step = engine.getCurrentStep();
-                const target =
-                  step && isConditionalStep(step)
-                    ? step.transitions[t]?.target
-                    : undefined;
-                return {
-                  value: t,
-                  label: t,
-                  description: target ? `→ ${target}` : undefined,
-                };
-              }),
+              result.availableTransitions,
             );
 
             if (choice) {
@@ -545,11 +534,7 @@ export default function (pi: ExtensionAPI) {
       } else {
         const choice = await ctx.ui.select(
           "Select agent:",
-          agents.map((a) => ({
-            value: a.name,
-            label: a.name,
-            description: a.description,
-          })),
+          agents.map((a) => a.name),
         );
         if (!choice) {
           return;
@@ -583,11 +568,7 @@ export default function (pi: ExtensionAPI) {
 
     const choice = await ctx.ui.select(
       "Select workflow:",
-      workflows.map((w) => ({
-        value: w.name,
-        label: w.name,
-        description: w.definition.description || "",
-      })),
+      workflows.map((w) => w.name),
     );
     return choice;
   }
