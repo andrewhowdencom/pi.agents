@@ -14,6 +14,10 @@ covers how to write, validate, and test workflow definitions.
 mkdir -p .pi/workflows
 ```
 
+Workflows can also be defined globally in `~/.pi/agent/workflows/*.yml`.
+Project-local workflows take precedence when names collide — the same rule as
+agents.
+
 ## Step 2: Write a Linear Workflow
 
 Create a workflow with two linear steps that auto-advance:
