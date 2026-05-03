@@ -320,17 +320,32 @@ export default function (pi: ExtensionAPI) {
       const targetTools = new Set(originalToolSet);
       const currentStep = engine.getCurrentStep();
 
-      if (currentStep && isConditionalStep(currentStep)) {
-        targetTools.add("workflow_signal");
-
-        if (currentStep.subagents) {
+      if (currentStep) {
+        // Build approved subagent set for the current step
+        const approvedSubagents = new Set<string>();
+        if (
+          (isLinearStep(currentStep) || isConditionalStep(currentStep)) &&
+          currentStep.subagents
+        ) {
           const agents = await discoverAgents(pi, ctx.cwd);
           for (const subName of currentStep.subagents) {
             const subAgent = agents.find((a) => a.name === subName);
             if (subAgent?.toolName) {
-              targetTools.add(subAgent.toolName);
+              approvedSubagents.add(subAgent.toolName);
             }
           }
+        }
+
+        // Remove any registered subagent tools not in the approved set
+        for (const toolName of registeredSubagentTools) {
+          if (!approvedSubagents.has(toolName)) {
+            targetTools.delete(toolName);
+          }
+        }
+
+        // Only conditional steps get workflow_signal
+        if (isConditionalStep(currentStep)) {
+          targetTools.add("workflow_signal");
         }
       }
 

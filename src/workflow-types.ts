@@ -13,6 +13,8 @@ export interface LinearStep {
   agent: string;
   type: "linear";
   prompt?: string;
+  /** List of subagent names available during this step. */
+  subagents?: string[];
 }
 
 /** A conditional step requires the agent to call workflow_signal to choose the next step. */

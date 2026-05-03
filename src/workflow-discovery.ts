@@ -68,11 +68,16 @@ function validateStep(
       );
       return null;
     }
+    let subagents: string[] | undefined;
+    if (Array.isArray(s.subagents)) {
+      subagents = s.subagents.filter((a): a is string => typeof a === "string");
+    }
     return {
       id: s.id,
       agent: s.agent,
       type: "linear",
       prompt: typeof s.prompt === "string" ? s.prompt : undefined,
+      subagents: subagents && subagents.length > 0 ? subagents : undefined,
     };
   }
 

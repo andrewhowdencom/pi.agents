@@ -404,7 +404,7 @@ export class WorkflowEngine {
           missing.push(step.agent);
         }
       }
-      if (isConditionalStep(step) && step.subagents) {
+      if ((isLinearStep(step) || isConditionalStep(step)) && step.subagents) {
         for (const sub of step.subagents) {
           if (!validAgentNames.has(sub)) {
             missing.push(sub);
