@@ -48,6 +48,7 @@ export class PiRpcClient {
   private killed = false;
   private eventListeners: RpcEventListener[] = [];
   private accumulatedUsage: AccumulatedUsage | undefined;
+  private exitInfo: { code: number | null; signal: string | null } | null = null;
 
   constructor(args: string[]) {
     this.proc = spawn("pi", args, {
@@ -73,7 +74,7 @@ export class PiRpcClient {
     });
 
     this.proc.on("exit", (code, signal) => {
-      if (!this.resolveCompletion && !this.rejectCompletion) return;
+      this.exitInfo = { code, signal };
 
       const reason = signal
         ? `Subagent process killed by signal ${signal}`
@@ -245,6 +246,16 @@ export class PiRpcClient {
     return new Promise((resolve, reject) => {
       this.resolveCompletion = resolve;
       this.rejectCompletion = reject;
+
+      if (this.exitInfo) {
+        const reason = this.exitInfo.signal
+          ? `Subagent process killed by signal ${this.exitInfo.signal}`
+          : `Subagent process exited with code ${this.exitInfo.code}`;
+        reject(new Error(reason));
+        this.rejectCompletion = null;
+        this.resolveCompletion = null;
+        return;
+      }
 
       if (options.timeoutMs !== undefined && options.timeoutMs > 0) {
         this.timeoutId = setTimeout(() => {
