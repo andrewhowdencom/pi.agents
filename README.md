@@ -14,7 +14,9 @@ lightweight same-session agent switches with full conversation history preserved
 - **Visual agent selection** — Browse and select agents via a picker UI
 - **Lightweight agent switching** — Switch agents within the same session, preserving full history
 - **Autonomous handoffs** — Agents can transfer control to another agent via the `switch_agent` tool
-- **Subagents** — Invoke specialized agents as scoped tools and resume the caller's workflow
+- **Agent discovery** — Discover available agents and delegates via `list_agents` and `list_delegates` tools
+- **Delegates** — Invoke specialized agents as scoped delegates via the `delegate_agent` tool and resume the caller's workflow
+- **Role-based capabilities** — Configure agents as leaders, delegates, or both via frontmatter
 - **Workflows** — Define multi-agent pipelines as YAML files with linear, conditional, and pause steps
 - **Ad-hoc chains** — Run quick linear agent sequences without creating a YAML file
 - **Session persistence** — Active agent and workflow state are restored across sessions
@@ -72,7 +74,7 @@ Full documentation is available at [https://andrewhowdencom.github.io/pi.agents/
 | [Creating Workflows](docs/how-to/create-workflow.md) | How to write workflow YAML files |
 | [Command Reference](docs/reference/commands.md) | All commands and tools |
 | [Workflow YAML Reference](docs/reference/workflow-yaml.md) | Complete workflow schema |
-| [Subagent Configuration](docs/reference/subagent-frontmatter.md) | Subagent frontmatter fields |
+| [Agent Frontmatter](docs/reference/subagent-frontmatter.md) | Agent frontmatter and role configuration |
 | [Architecture](docs/explanation/architecture.md) | How the extension works internally |
 
 ## License

@@ -68,16 +68,21 @@ function validateStep(
       );
       return null;
     }
-    let subagents: string[] | undefined;
-    if (Array.isArray(s.subagents)) {
-      subagents = s.subagents.filter((a): a is string => typeof a === "string");
+    let delegates: string[] | undefined;
+    if (Array.isArray(s.delegates)) {
+      delegates = s.delegates.filter((a): a is string => typeof a === "string");
+    } else if (Array.isArray(s.subagents)) {
+      delegates = s.subagents.filter((a): a is string => typeof a === "string");
+      console.warn(
+        `[pi-agents] Workflow step uses deprecated field "subagents". Use "delegates" instead.`,
+      );
     }
     return {
       id: s.id,
       agent: s.agent,
       type: "linear",
       prompt: typeof s.prompt === "string" ? s.prompt : undefined,
-      subagents: subagents && subagents.length > 0 ? subagents : undefined,
+      delegates: delegates && delegates.length > 0 ? delegates : undefined,
     };
   }
 
@@ -126,9 +131,14 @@ function validateStep(
       return null;
     }
 
-    let subagents: string[] | undefined;
-    if (Array.isArray(s.subagents)) {
-      subagents = s.subagents.filter((a): a is string => typeof a === "string");
+    let delegates: string[] | undefined;
+    if (Array.isArray(s.delegates)) {
+      delegates = s.delegates.filter((a): a is string => typeof a === "string");
+    } else if (Array.isArray(s.subagents)) {
+      delegates = s.subagents.filter((a): a is string => typeof a === "string");
+      console.warn(
+        `[pi-agents] Workflow step uses deprecated field "subagents". Use "delegates" instead.`,
+      );
     }
 
     let loopMax: number | undefined;
@@ -144,7 +154,7 @@ function validateStep(
       agent: s.agent,
       type: "conditional",
       prompt: typeof s.prompt === "string" ? s.prompt : undefined,
-      subagents: subagents && subagents.length > 0 ? subagents : undefined,
+      delegates: delegates && delegates.length > 0 ? delegates : undefined,
       transitions: parsedTransitions,
       loop_max: loopMax,
       loop_message: typeof s.loop_message === "string" ? s.loop_message : undefined,

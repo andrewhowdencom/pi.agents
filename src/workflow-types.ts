@@ -4,7 +4,7 @@
  * Workflows are defined as YAML files in .pi/workflows/*.yml, *.yaml, and
  * ~/.pi/agent/workflows/*.yml, *.yaml. The engine executes them as a state machine
  * with support for linear auto-transitions, conditional tool-call-driven
- * transitions, pause steps, and subagent composition.
+ * transitions, pause steps, and delegate composition.
  */
 
 /** A linear step auto-advances to the next step when the agent finishes. */
@@ -13,8 +13,8 @@ export interface LinearStep {
   agent: string;
   type: "linear";
   prompt?: string;
-  /** List of subagent names available during this step. */
-  subagents?: string[];
+  /** List of delegate agent names available during this step. */
+  delegates?: string[];
 }
 
 /** A conditional step requires the agent to call workflow_signal to choose the next step. */
@@ -23,8 +23,8 @@ export interface ConditionalStep {
   agent: string;
   type: "conditional";
   prompt?: string;
-  /** List of subagent names the coordinator should invoke during this step. */
-  subagents?: string[];
+  /** List of delegate agent names the coordinator should invoke during this step. */
+  delegates?: string[];
   transitions: Record<string, { target: string; message?: string }>;
   loop_max?: number;
   loop_message?: string;

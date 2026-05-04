@@ -6,7 +6,7 @@ import type { AgentDefinition } from "./agent-discovery.js";
 import { discoverAgents, clearAgentCache } from "./agent-discovery.js";
 import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { buildSubagentToolSchema, executeSubagent } from "./subagent-tools.js";
+import { executeSubagent } from "./subagent-tools.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   type WorkflowStep,
@@ -22,22 +22,21 @@ import { WorkflowEngine } from "./workflow-engine.js";
 
 export default function (pi: ExtensionAPI) {
   let activeAgentName: string | undefined;
-  const registeredSubagentTools = new Set<string>();
-  const MAX_SUBAGENT_DEPTH = 3;
-  const subagentStorage = new AsyncLocalStorage<{ depth: number }>();
+  const MAX_DELEGATE_DEPTH = 3;
+  const delegateStorage = new AsyncLocalStorage<{ depth: number }>();
 
   // --- Workflow engine and state ---
   const engine = new WorkflowEngine();
   let originalToolSet: string[] | null = null;
 
-  function getSubagentDepth(): number {
-    const store = subagentStorage.getStore();
+  function getDelegateDepth(): number {
+    const store = delegateStorage.getStore();
     return store?.depth ?? 0;
   }
 
-  function withSubagentDepth<T>(fn: () => Promise<T>): Promise<T> {
-    const currentDepth = getSubagentDepth();
-    return subagentStorage.run({ depth: currentDepth + 1 }, fn);
+  function withDelegateDepth<T>(fn: () => Promise<T>): Promise<T> {
+    const currentDepth = getDelegateDepth();
+    return delegateStorage.run({ depth: currentDepth + 1 }, fn);
   }
 
   function updateAgentStatus(ctx: ExtensionContext, name: string | undefined) {
@@ -73,124 +72,6 @@ export default function (pi: ExtensionAPI) {
     updateAgentStatus(ctx, name);
     if (name) {
       pi.appendEntry("agent-state", { name });
-    }
-  }
-
-  function registerSubagentTools(agents: AgentDefinition[]) {
-    for (const agent of agents) {
-      if (!agent.subagent || !agent.toolName) continue;
-
-      if (registeredSubagentTools.has(agent.toolName)) continue;
-
-      if (agent.toolName === "switch_agent") {
-        console.warn(
-          `[pi-agents] Subagent tool name "${agent.toolName}" collides with switch_agent, skipping`,
-        );
-        continue;
-      }
-
-      registeredSubagentTools.add(agent.toolName);
-
-      const schema = buildSubagentToolSchema(agent);
-
-      pi.registerTool({
-        name: agent.toolName,
-        label: `Invoke ${agent.name}`,
-        description:
-          agent.description || `Invoke ${agent.name} as a subagent`,
-        promptSnippet: `Invoke the ${agent.name} subagent with a scoped goal`,
-        promptGuidelines: [
-          `Use ${agent.toolName} when you need the ${agent.name} agent to perform a specific, scoped task and return its output. The caller agent will resume after the subagent completes.`,
-        ],
-        parameters: schema,
-        async execute(_toolCallId, params, signal, onUpdate, ctx) {
-          // Self-invocation guardrail
-          if (activeAgentName === agent.name) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Cannot invoke subagent ${agent.name} because it is the currently active agent.`,
-                },
-              ],
-              details: {},
-              isError: true,
-            };
-          }
-
-          // Depth limit guardrail
-          const depth = getSubagentDepth();
-          if (depth >= MAX_SUBAGENT_DEPTH) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: `Subagent depth limit (${MAX_SUBAGENT_DEPTH}) exceeded. Cannot nest deeper than ${MAX_SUBAGENT_DEPTH} levels.`,
-                },
-              ],
-              details: { currentDepth: depth },
-              isError: true,
-            };
-          }
-
-          const maxTurns = agent.maxTurns;
-
-          if (ctx.hasUI) {
-            ctx.ui.setWorkingMessage(`Invoking ${agent.name}...`);
-          }
-
-          const onSubagentUpdate = (partial: {
-            content: Array<{ type: "text"; text: string }>;
-            details: unknown;
-            terminate?: boolean;
-          }) => {
-            onUpdate?.(partial);
-            if (ctx.hasUI) {
-              const details = partial.details as {
-                turnCount?: number;
-                maxTurns?: number;
-                usage?: { cost?: { total?: number } };
-              } | undefined;
-              const turn = details?.turnCount ?? 0;
-              const total = details?.maxTurns ?? maxTurns;
-              const totalText = total !== undefined ? `/${total}` : "";
-              const cost = details?.usage?.cost?.total ?? 0;
-              const costText = cost > 0 ? `, ~$${cost.toFixed(4)}` : "";
-              ctx.ui.setWorkingMessage(
-                `${agent.name}: turn ${turn}${totalText}${costText}`,
-              );
-            }
-          };
-
-          const result = await withSubagentDepth(() =>
-            executeSubagent(
-              agent,
-              params,
-              signal,
-              onSubagentUpdate,
-            ),
-          );
-
-          if (ctx.hasUI) {
-            ctx.ui.setWorkingMessage();
-          }
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: result.output,
-              },
-            ],
-            details: {
-              turnCount: result.turnCount,
-              timedOut: result.timedOut,
-              subagentDepth: depth + 1,
-              usage: result.usage,
-            },
-          };
-        },
-      });
     }
   }
 
@@ -256,8 +137,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    const agents = await discoverAgents(pi, ctx.cwd);
-    registerSubagentTools(agents);
+    await discoverAgents(pi, ctx.cwd);
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
@@ -282,25 +162,17 @@ export default function (pi: ExtensionAPI) {
           if (step.prompt) {
             // User override
             systemPrompt += `\n\n# Workflow Step: ${step.id}\n\n${step.prompt}`;
-          } else if (step.subagents && step.subagents.length > 0) {
+          } else if (step.delegates && step.delegates.length > 0) {
             // Auto-generated coordinator prompt
-            const agents = await discoverAgents(pi, ctx.cwd);
-            const toolNames = step.subagents
-              .map((name) => {
-                const a = agents.find((agent) => agent.name === name);
-                return a?.toolName || `invoke_${name.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-              })
-              .filter(Boolean);
-
             const availableSignals = Object.keys(step.transitions).join(", ");
 
             systemPrompt += `\n\n# Workflow Decision Point\n\nYou are at a workflow decision point for step "${step.id}". `;
-            systemPrompt += `The following specialized reviewers are available as subagent tools: ${toolNames.join(", ")}. `;
-            systemPrompt += `Call each with a scoped goal based on the implementation, wait for their output, synthesize all findings, `;
+            systemPrompt += `The following specialized reviewers are available as delegates: ${step.delegates.join(", ")}. `;
+            systemPrompt += `Call delegate_agent(agent: '<name>', goal: '<scoped goal>') for each, wait for their output, synthesize all findings, `;
             systemPrompt += `and then call workflow_signal(signal: '<signal>') to choose the next step. `;
             systemPrompt += `Available signals: ${availableSignals}.`;
           } else {
-            // Simple conditional without subagents
+            // Simple conditional without delegates
             const availableSignals = Object.keys(step.transitions).join(", ");
             systemPrompt += `\n\n# Workflow Decision Point\n\nYou are at a workflow decision point for step "${step.id}". `;
             systemPrompt += `Call workflow_signal(signal: '<signal>') to choose the next step. `;
@@ -318,35 +190,11 @@ export default function (pi: ExtensionAPI) {
       }
 
       const targetTools = new Set(originalToolSet);
+
+      // Only conditional steps get workflow_signal
       const currentStep = engine.getCurrentStep();
-
-      if (currentStep) {
-        // Build approved subagent set for the current step
-        const approvedSubagents = new Set<string>();
-        if (
-          (isLinearStep(currentStep) || isConditionalStep(currentStep)) &&
-          currentStep.subagents
-        ) {
-          const agents = await discoverAgents(pi, ctx.cwd);
-          for (const subName of currentStep.subagents) {
-            const subAgent = agents.find((a) => a.name === subName);
-            if (subAgent?.toolName) {
-              approvedSubagents.add(subAgent.toolName);
-            }
-          }
-        }
-
-        // Remove any registered subagent tools not in the approved set
-        for (const toolName of registeredSubagentTools) {
-          if (!approvedSubagents.has(toolName)) {
-            targetTools.delete(toolName);
-          }
-        }
-
-        // Only conditional steps get workflow_signal
-        if (isConditionalStep(currentStep)) {
-          targetTools.add("workflow_signal");
-        }
+      if (currentStep && isConditionalStep(currentStep)) {
+        targetTools.add("workflow_signal");
       }
 
       pi.setActiveTools([...targetTools]);
@@ -509,7 +357,6 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     clearAgentCache();
-    registeredSubagentTools.clear();
 
     if (engine.isAnyWorkflowActive()) {
       engine.persist(pi);
@@ -875,6 +722,19 @@ export default function (pi: ExtensionAPI) {
           };
         }
 
+        if (!targetAgent.role.includes("leader")) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Agent "${params.agent}" is not configured as a leader. Add 'leader' to its role (e.g., role: [leader]) to enable switching.`,
+              },
+            ],
+            details: {},
+            isError: true,
+          };
+        }
+
         if (activeAgentName === params.agent) {
           return {
             content: [
@@ -1012,6 +872,221 @@ export default function (pi: ExtensionAPI) {
           target,
           signal: params.signal,
           feedback: params.feedback,
+        },
+      };
+    },
+  });
+
+  // --- Discovery and delegate tools ---
+
+  pi.registerTool({
+    name: "list_agents",
+    label: "List Agents",
+    description: "List all available agents with their capabilities.",
+    promptSnippet: "List available agents",
+    promptGuidelines: [
+      "Use list_agents before calling switch_agent or delegate_agent to discover which agents are available and their capabilities.",
+    ],
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const agents = await discoverAgents(pi, ctx.cwd);
+      const text = agents
+        .map((a) => `- **${a.name}**: ${a.description || "No description"} (role: ${a.role.join(", ")})`)
+        .join("\n");
+      return {
+        content: [{ type: "text", text: text || "No agents found." }],
+        details: { agents: agents.map((a) => ({ name: a.name, description: a.description, role: a.role, path: a.path })) },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "list_delegates",
+    label: "List Delegates",
+    description: "List all agents that can be invoked as delegates.",
+    promptSnippet: "List available delegate agents",
+    promptGuidelines: [
+      "Use list_delegates to discover which agents can be invoked as delegates via delegate_agent.",
+    ],
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const agents = await discoverAgents(pi, ctx.cwd);
+      const delegates = agents.filter((a) => a.role.includes("delegate"));
+      const text = delegates
+        .map((a) => `- **${a.name}**${a.model ? ` (${a.model})` : ""}: ${a.description || "No description"}`)
+        .join("\n");
+      return {
+        content: [{ type: "text", text: text || "No delegate agents found." }],
+        details: {
+          delegates: delegates.map((a) => ({
+            name: a.name,
+            description: a.description,
+            toolName: a.toolName,
+            model: a.model,
+            timeout: a.timeout,
+            maxTurns: a.maxTurns,
+          })),
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "delegate_agent",
+    label: "Delegate to Agent",
+    description: "Invoke a delegate agent to perform a scoped task and return its output.",
+    promptSnippet: "Invoke a delegate agent with a scoped goal",
+    promptGuidelines: [
+      "Use delegate_agent when you need a specialized agent to perform a specific, scoped task and return its output. The caller agent will resume after the delegate completes.",
+    ],
+    parameters: Type.Object({
+      agent: Type.String({
+        description: "Name of the delegate agent to invoke",
+      }),
+      goal: Type.String({
+        description: "The scoped goal or task for the delegate agent",
+      }),
+    }),
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const agents = await discoverAgents(pi, ctx.cwd);
+      const agent = agents.find((a) => a.name === params.agent);
+
+      if (!agent) {
+        const availableDelegates = agents
+          .filter((a) => a.role.includes("delegate"))
+          .map((a) => a.name)
+          .join(", ");
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Agent "${params.agent}" not found. Available delegates: ${availableDelegates || "none"}.`,
+            },
+          ],
+          details: { availableDelegates: availableDelegates.split(", ").filter(Boolean) },
+          isError: true,
+        };
+      }
+
+      if (!agent.role.includes("delegate")) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Agent '${params.agent}' is not configured as a delegate. Add 'delegate' to its role (e.g., role: [delegate] or role: [leader, delegate]) to enable delegation.`,
+            },
+          ],
+          details: {},
+          isError: true,
+        };
+      }
+
+      // Self-invocation guardrail
+      if (activeAgentName === agent.name) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Cannot delegate to ${agent.name} because it is the currently active agent.`,
+            },
+          ],
+          details: {},
+          isError: true,
+        };
+      }
+
+      // Depth limit guardrail
+      const depth = getDelegateDepth();
+      if (depth >= MAX_DELEGATE_DEPTH) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Delegate depth limit (${MAX_DELEGATE_DEPTH}) exceeded. Cannot nest deeper than ${MAX_DELEGATE_DEPTH} levels.`,
+            },
+          ],
+          details: { currentDepth: depth },
+          isError: true,
+        };
+      }
+
+      // Workflow step approval guardrail
+      if (engine.isAnyWorkflowActive()) {
+        const currentStep = engine.getCurrentStep();
+        if (
+          currentStep &&
+          (isLinearStep(currentStep) || isConditionalStep(currentStep)) &&
+          currentStep.delegates
+        ) {
+          if (!currentStep.delegates.includes(params.agent)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Delegate ${params.agent} is not approved for the current workflow step. Approved delegates: ${currentStep.delegates.join(", ")}.`,
+                },
+              ],
+              details: { approvedDelegates: currentStep.delegates },
+              isError: true,
+            };
+          }
+        }
+      }
+
+      const maxTurns = agent.maxTurns;
+
+      if (ctx.hasUI) {
+        ctx.ui.setWorkingMessage(`Delegating to ${agent.name}...`);
+      }
+
+      const onDelegateUpdate = (partial: {
+        content: Array<{ type: "text"; text: string }>;
+        details: unknown;
+        terminate?: boolean;
+      }) => {
+        onUpdate?.(partial);
+        if (ctx.hasUI) {
+          const details = partial.details as {
+            turnCount?: number;
+            maxTurns?: number;
+            usage?: { cost?: { total?: number } };
+          } | undefined;
+          const turn = details?.turnCount ?? 0;
+          const total = details?.maxTurns ?? maxTurns;
+          const totalText = total !== undefined ? `/${total}` : "";
+          const cost = details?.usage?.cost?.total ?? 0;
+          const costText = cost > 0 ? `, ~$${cost.toFixed(4)}` : "";
+          ctx.ui.setWorkingMessage(
+            `${agent.name}: turn ${turn}${totalText}${costText}`,
+          );
+        }
+      };
+
+      const result = await withDelegateDepth(() =>
+        executeSubagent(
+          agent,
+          { goal: params.goal },
+          signal,
+          onDelegateUpdate,
+        ),
+      );
+
+      if (ctx.hasUI) {
+        ctx.ui.setWorkingMessage();
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: result.output,
+          },
+        ],
+        details: {
+          turnCount: result.turnCount,
+          timedOut: result.timedOut,
+          delegateDepth: depth + 1,
+          usage: result.usage,
         },
       };
     },

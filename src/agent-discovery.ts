@@ -35,7 +35,7 @@ function getAgentSearchPaths(cwd: string): SearchPath[] {
   ];
 }
 
-/** Parameter declaration for a subagent tool schema. */
+/** Parameter declaration for a delegate tool schema. */
 export interface ToolParameter {
   /** Parameter name */
   name: string;
@@ -57,17 +57,17 @@ export interface AgentDefinition {
   description: string;
   /** Markdown body (frontmatter stripped) capturing the agent's role */
   content: string;
-  /** Whether this agent can be invoked as a subagent tool */
-  subagent?: boolean;
-  /** Override for the generated tool name (default: invoke_{kebab-case name}) */
+  /** Capabilities of this agent: "leader" (can be switched to) and/or "delegate" (can be invoked as a delegate) */
+  role: ("leader" | "delegate")[];
+  /** Override for the generated tool name (default: invoke_{kebab-case name}) — deprecated, unused with unified delegate_agent */
   toolName?: string;
   /** Additional tool parameters beyond the default `goal` */
   toolSchema?: ToolParameter[];
-  /** LLM model for this subagent (e.g. "anthropic/claude-sonnet-4") */
+  /** LLM model for this delegate (e.g. "anthropic/claude-sonnet-4") */
   model?: string;
-  /** RPC timeout in milliseconds. When not specified, the subagent runs until completion (no timeout). */
+  /** RPC timeout in milliseconds. When not specified, the delegate runs until completion (no timeout). */
   timeout?: number;
-  /** Maximum turns before forcible stop. When not specified, the subagent runs until completion (no limit). */
+  /** Maximum turns before forcible stop. When not specified, the delegate runs until completion (no limit). */
   maxTurns?: number;
 }
 
@@ -147,8 +147,69 @@ export async function discoverAgents(
             ? frontmatter.description
             : "";
 
-        const subagent =
-          frontmatter.subagent === true || frontmatter.subagent === "true";
+        // Parse role field (primary)
+        let role: ("leader" | "delegate")[] | undefined;
+
+        if (Array.isArray(frontmatter.role)) {
+          role = frontmatter.role
+            .filter((r): r is string => typeof r === "string")
+            .map((r) => r.toLowerCase())
+            .filter(
+              (r): r is "leader" | "delegate" =>
+                r === "leader" || r === "delegate",
+            );
+        } else if (typeof frontmatter.role === "string") {
+          const r = frontmatter.role.toLowerCase();
+          if (r === "leader" || r === "delegate") {
+            role = [r];
+          } else {
+            role = [];
+          }
+        }
+
+        // Fallback to deprecated boolean fields when role is not explicitly set
+        if (!role) {
+          role = ["leader"]; // default: all agents are leaders
+
+          if (frontmatter.lead === false || frontmatter.lead === "false") {
+            role = role.filter((r) => r !== "leader");
+          }
+
+          if (
+            frontmatter.delegate === true ||
+            frontmatter.delegate === "true"
+          ) {
+            if (!role.includes("delegate")) role.push("delegate");
+          }
+
+          if (
+            frontmatter.subagent === true ||
+            frontmatter.subagent === "true"
+          ) {
+            if (!role.includes("delegate")) role.push("delegate");
+          }
+
+          const deprecatedKeys: string[] = [];
+          if (frontmatter.lead !== undefined) deprecatedKeys.push("lead");
+          if (frontmatter.delegate !== undefined)
+            deprecatedKeys.push("delegate");
+          if (frontmatter.subagent !== undefined)
+            deprecatedKeys.push("subagent");
+
+          if (deprecatedKeys.length > 0) {
+            console.warn(
+              `[pi-agents] Agent "${agentName}" uses deprecated frontmatter key(s) ${deprecatedKeys.join(", ")}. Use "role" instead (e.g., role: [leader, delegate]).`,
+            );
+          }
+        } else if (
+          frontmatter.lead !== undefined ||
+          frontmatter.delegate !== undefined ||
+          frontmatter.subagent !== undefined
+        ) {
+          console.warn(
+            `[pi-agents] Agent "${agentName}" has both "role" and deprecated keys (lead, delegate, subagent). "role" takes precedence.`,
+          );
+        }
 
         const toolName =
           typeof frontmatter.tool_name === "string" && frontmatter.tool_name
@@ -214,7 +275,7 @@ export async function discoverAgents(
           path: filePath,
           description,
           content: body,
-          subagent,
+          role,
           toolName,
           toolSchema,
           model,

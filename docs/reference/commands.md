@@ -88,11 +88,12 @@ switch_agent(agent="builder")
 **Behavior:**
 
 1. Validates the target agent exists in the discovered agents
-2. Checks for self-switch (rejected with error)
-3. Prompts user for confirmation (unless non-interactive or flag override)
-4. Updates the active agent in the status bar
-5. Appends an `agent-state` entry to the session
-6. Injects the new agent's content on the next `before_agent_start` event
+2. Validates the target agent has `"leader"` in its `role` (rejected with error if not)
+3. Checks for self-switch (rejected with error)
+4. Prompts user for confirmation (unless non-interactive or flag override)
+5. Updates the active agent in the status bar
+6. Appends an `agent-state` entry to the session
+7. Injects the new agent's content on the next `before_agent_start` event
 
 ### `workflow_signal`
 
@@ -119,6 +120,89 @@ workflow_signal(signal="changes_needed", feedback="Add more tests")
 2. Validates the signal against the step's `transitions` map
 3. Records the signal and schedules the transition
 4. Returns confirmation of the target step
+
+### `list_agents`
+
+List all available agents with their capabilities.
+
+**Parameters:** _(none)_
+
+**Example:**
+
+```tool
+list_agents()
+```
+
+**Result:**
+
+```
+- **planner**: Plans software architecture and implementation (role: leader, delegate)
+- **reviewer**: Reviews code for risks and quality (role: delegate)
+- **archived-legacy**: Old template agent (role: none)
+```
+
+**Behavior:**
+
+1. Discovers all agents from `.pi/agents/*.md` and legacy locations
+2. Returns a markdown-formatted list of agents with their `role` array
+3. The structured `details.agents` array is also available for programmatic use
+
+### `list_delegates`
+
+List all agents that can be invoked as delegates.
+
+**Parameters:** _(none)_
+
+**Example:**
+
+```tool
+list_delegates()
+```
+
+**Behavior:**
+
+1. Discovers all agents and filters for those with `"delegate"` in their `role`
+2. Returns a markdown-formatted list with model information (if configured)
+3. The structured `details.delegates` array includes full metadata for selection
+
+### `delegate_agent`
+
+Invoke a delegate agent to perform a scoped task and return its output. The
+caller agent resumes after the delegate completes.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `agent` | string | Yes | Name of the delegate agent to invoke |
+| `goal` | string | Yes | The scoped goal or task for the delegate |
+
+**Example:**
+
+```tool
+delegate_agent(agent="reviewer", goal="Review the authentication module for security risks")
+```
+
+**Behavior:**
+
+1. Validates the target agent exists and has `"delegate"` in its `role`
+2. Checks for self-invocation guardrail (rejected with error)
+3. Checks delegate nesting depth limit (3 levels max)
+4. Checks workflow step approval (if in a workflow step with a `delegates` list)
+5. Spawns the delegate agent via RPC with the provided goal
+6. Returns the delegate's final output in the tool result
+7. The caller agent resumes its own workflow after receiving the result
+
+**Tool Result Details:**
+
+The tool result includes the following in `details`:
+
+| Field | Type | Description |
+|---|---|---|
+| `turnCount` | number | Number of turns the delegate executed |
+| `timedOut` | boolean | Whether the delegate hit the timeout limit |
+| `delegateDepth` | number | Nesting depth of this delegate invocation |
+| `usage` | object | Cumulative token usage and cost |
 
 ## CLI Flags
 

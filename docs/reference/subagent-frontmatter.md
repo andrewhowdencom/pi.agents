@@ -1,82 +1,95 @@
-# Subagent Frontmatter Reference
+# Agent Frontmatter Reference
 
-Agents marked with `subagent: true` in their YAML frontmatter are automatically
-registered as invocable tools. The calling agent can invoke them with a scoped
-`goal` and resume its own workflow after receiving the result.
+Agent capabilities are declared via the `role` array in YAML frontmatter. An agent
+can be a **leader** (can be switched to via `switch_agent`), a **delegate** (can
+be invoked via `delegate_agent`), both, or neither.
 
-## Enabling Subagent Mode
+## Agent Roles
 
-Add `subagent: true` to the agent's frontmatter:
+Add the `role` array to the agent's frontmatter:
 
 ```markdown
 ---
 description: "Reviews code and architecture decisions for risks"
-subagent: true
+role:
+  - delegate
 ---
 
 You are a code reviewer. Your role is to identify risks, suggest improvements,
 and evaluate trade-offs.
 ```
 
+### Available Roles
+
+| Role | Description |
+|---|---|
+| `leader` | Agent can be switched to via `switch_agent`. All agents are leaders by default. |
+| `delegate` | Agent can be invoked via `delegate_agent`. Must be explicitly declared. |
+
+An agent can declare one or both roles:
+
+- **Leader only** (`role: [leader]`) — a long-running persona that owns a phase
+- **Delegate only** (`role: [delegate]`) — a scoped reviewer that is never the session owner
+- **Both** (`role: [leader, delegate]`) — a planner that can own planning and also be called for quick checks
+- **Neither** (`role: []`) — a deprecated or template agent
+
+When the `role` field is absent, the default is `["leader"]` for backward
+compatibility.
+
 ## Frontmatter Fields
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `subagent` | boolean | `false` | Set to `true` to enable subagent mode |
-| `model` | string | *(Pi default)* | LLM model for this subagent (e.g., `anthropic/claude-sonnet-4`, `openai/gpt-4.1`). Passed as `--model` to the subagent's RPC process. |
-| `timeout` | number | `60000` | RPC timeout in milliseconds. The subagent process is killed if it exceeds this. |
-| `max_turns` | number | `30` | Maximum turns before the subagent is forcibly stopped. |
-| `tool_name` | string | `invoke_{name}` | Override the generated tool name |
-| `tool_schema` | array | — | Additional tool parameters beyond `goal` |
+| `role` | string array | `["leader"]` | Capabilities of this agent: `"leader"` and/or `"delegate"` |
+| `model` | string | *(Pi default)* | LLM model for this delegate (e.g., `anthropic/claude-sonnet-4`, `openai/gpt-4.1`). Passed as `--model` to the delegate's RPC process. |
+| `timeout` | number | `60000` | RPC timeout in milliseconds. The delegate process is killed if it exceeds this. |
+| `max_turns` | number | `30` | Maximum turns before the delegate is forcibly stopped. |
+| `tool_name` | string | `invoke_{name}` | **Deprecated.** Unused with unified `delegate_agent` tool. |
+| `tool_schema` | array | — | **Deprecated.** Custom parameters are no longer supported; embed structured data in the `goal` string instead. |
 
-## Custom Tool Parameters
+### Deprecated Boolean Fields
 
-Declare additional parameters via `tool_schema`:
+The following boolean fields are deprecated and parsed only when `role` is not
+explicitly set:
 
-```markdown
----
-description: "Reviews code and architecture decisions for risks"
-subagent: true
-tool_schema:
-  - name: files_to_review
-    type: string
-    description: "Comma-separated list of file paths to review"
-    required: false
----
-```
+| Deprecated Field | Maps To |
+|---|---|
+| `lead: false` | Removes `"leader"` from default role |
+| `delegate: true` | Adds `"delegate"` to role |
+| `subagent: true` | Adds `"delegate"` to role (oldest alias) |
 
-The tool always accepts `goal` (string, required). Custom parameters are added
-to the generated JSON Schema and passed through to the subagent process.
+A console warning is emitted when deprecated fields are used.
 
-## Generated Tool
+## The `delegate_agent` Tool
 
-For an agent named `reviewer` with `subagent: true`, the extension registers a
-tool named `invoke_reviewer` (or the value of `tool_name` if overridden).
+Agents with `delegate` in their `role` can be invoked via the unified
+`delegate_agent(agent, goal)` tool. There are no per-agent individual tools.
 
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `goal` | string | Yes | The scoped task for the subagent |
-| *(custom)* | *(schema-defined)* | Per schema | Additional parameters from `tool_schema` |
+| `agent` | string | Yes | Name of the delegate agent to invoke |
+| `goal` | string | Yes | The scoped task for the delegate |
 
 **Example invocation:**
 
 ```tool
-invoke_reviewer(
+delegate_agent(
+  agent="reviewer",
   goal="Review this architecture: we will use PostgreSQL for the primary store and Redis for caching. What are the operational risks?"
 )
 ```
 
 ## Tool Result Details
 
-The tool result includes the following in `details`:
+The `delegate_agent` tool result includes the following in `details`:
 
 | Field | Type | Description |
 |---|---|---|
-| `turnCount` | number | Number of turns the subagent executed |
-| `timedOut` | boolean | Whether the subagent hit the timeout limit |
-| `subagentDepth` | number | Nesting depth of this subagent invocation |
+| `turnCount` | number | Number of turns the delegate executed |
+| `timedOut` | boolean | Whether the delegate hit the timeout limit |
+| `delegateDepth` | number | Nesting depth of this delegate invocation |
 | `usage` | object | Cumulative token usage and cost |
 
 The `usage` object contains:
@@ -90,21 +103,35 @@ The `usage` object contains:
 | `totalTokens` | number | Total tokens (input + output + cache) |
 | `cost.total` | number | Estimated total cost in USD |
 
-## Complete Example
+## Complete Examples
+
+### Leader + Delegate
+
+```markdown
+---
+description: "Planner agent that can own phases and be called for quick checks"
+role:
+  - leader
+  - delegate
+model: anthropic/claude-sonnet-4
+timeout: 120000
+max_turns: 10
+---
+
+You are a software architect. You design system architecture, choose technology
+stacks, and plan implementation phases.
+```
+
+### Delegate Only
 
 ```markdown
 ---
 description: "Security-focused code reviewer"
-subagent: true
+role:
+  - delegate
 model: anthropic/claude-sonnet-4
-timeout: 120000
-max_turns: 10
-tool_name: invoke_security_reviewer
-tool_schema:
-  - name: severity_threshold
-    type: string
-    description: "Minimum severity to report: LOW, MEDIUM, HIGH, CRITICAL"
-    required: false
+timeout: 60000
+max_turns: 5
 ---
 
 You are a security reviewer. Your role is to identify vulnerabilities,
@@ -112,11 +139,21 @@ misconfigurations, and security anti-patterns in code and architecture.
 Focus on SQL injection, XSS, CSRF, authentication flaws, and data exposure.
 ```
 
+### Leader Only (Default)
+
+```markdown
+---
+description: "A helpful general-purpose assistant"
+---
+
+You are a helpful assistant focused on answering questions and providing guidance.
+```
+
 ## Guardrails
 
-- An agent cannot invoke itself as a subagent.
-- Subagent nesting is limited to 3 levels.
-- Subagent processes are killed after the configured timeout.
-- Subagents are limited to the configured turn count.
-- Subagent costs are tracked independently and are not merged into the parent
+- An agent cannot delegate to itself.
+- Delegate nesting is limited to 3 levels.
+- Delegate processes are killed after the configured timeout.
+- Delegates are limited to the configured turn count.
+- Delegate costs are tracked independently and are not merged into the parent
   session's cost totals.
