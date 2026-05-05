@@ -5,6 +5,8 @@ import { join } from "node:path";
 import type { AgentDefinition, ToolParameter } from "./agent-discovery.js";
 import { PiRpcClient, type AccumulatedUsage } from "./rpc-client.js";
 
+const DEFAULT_SUBAGENT_TIMEOUT = 60000;
+
 /**
  * Builds a TypeBox schema for a subagent tool from an AgentDefinition.
  *
@@ -66,7 +68,7 @@ export async function executeSubagent(
   signal: AbortSignal,
   onUpdate?: SubagentUpdateCallback,
 ): Promise<{ output: string; turnCount: number; timedOut: boolean; usage?: AccumulatedUsage }> {
-  const timeoutMs = agent.timeout;
+  const effectiveTimeout = agent.timeout ?? DEFAULT_SUBAGENT_TIMEOUT;
   const maxTurns = agent.maxTurns;
   // Compose the prompt from goal + toolSchema params
   const goal = String(params.goal ?? "");
@@ -163,7 +165,7 @@ export async function executeSubagent(
 
     const result = await client.waitForCompletion({
       signal,
-      timeoutMs,
+      timeoutMs: effectiveTimeout,
       maxTurns,
     });
 
@@ -191,7 +193,7 @@ export async function executeSubagent(
     if (err instanceof Error) {
       if (err.message.includes("timed out")) {
         timedOut = true;
-        output = `Subagent ${agent.name} timed out after ${timeoutMs}ms.`;
+        output = `Subagent ${agent.name} timed out after ${effectiveTimeout}ms of inactivity.`;
       } else if (err.message.includes("cancelled")) {
         output = `Subagent ${agent.name} was cancelled.`;
       } else if (err.message.includes("exceeded maximum")) {

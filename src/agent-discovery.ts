@@ -65,7 +65,7 @@ export interface AgentDefinition {
   toolSchema?: ToolParameter[];
   /** LLM model for this delegate (e.g. "anthropic/claude-sonnet-4") */
   model?: string;
-  /** RPC timeout in milliseconds. When not specified, the delegate runs until completion (no timeout). */
+  /** RPC idle-timeout in milliseconds. When not specified, defaults to 60000ms (60 seconds). The timer resets on every stdout event; only subagents that go silent for this duration are killed. */
   timeout?: number;
   /** Maximum turns before forcible stop. When not specified, the delegate runs until completion (no limit). */
   maxTurns?: number;

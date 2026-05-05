@@ -44,7 +44,8 @@ export class PiRpcClient {
   private rejectCompletion: ((reason: Error) => void) | null = null;
   private turnCount = 0;
   private maxTurns: number | undefined;
-  private timeoutId: NodeJS.Timeout | null = null;
+  private idleTimeoutId: NodeJS.Timeout | null = null;
+  private idleTimeoutMs: number | undefined = undefined;
   private killed = false;
   private eventListeners: RpcEventListener[] = [];
   private accumulatedUsage: AccumulatedUsage | undefined;
@@ -76,6 +77,11 @@ export class PiRpcClient {
     this.proc.on("exit", (code, signal) => {
       this.exitInfo = { code, signal };
 
+      if (this.idleTimeoutId) {
+        clearTimeout(this.idleTimeoutId);
+        this.idleTimeoutId = null;
+      }
+
       const reason = signal
         ? `Subagent process killed by signal ${signal}`
         : `Subagent process exited with code ${code}`;
@@ -89,6 +95,9 @@ export class PiRpcClient {
   }
 
   private onStdoutData(chunk: Buffer) {
+    if (this.rejectCompletion && this.idleTimeoutMs) {
+      this.setIdleTimeout(this.rejectCompletion);
+    }
     this.buffer += this.decoder.decode(chunk, { stream: true });
 
     while (true) {
@@ -199,15 +208,29 @@ export class PiRpcClient {
         }
       }
     } else if (event.type === "agent_end") {
-      if (this.timeoutId) {
-        clearTimeout(this.timeoutId);
-        this.timeoutId = null;
+      if (this.idleTimeoutId) {
+        clearTimeout(this.idleTimeoutId);
+        this.idleTimeoutId = null;
       }
+      this.idleTimeoutMs = undefined;
       if (this.resolveCompletion) {
         this.resolveCompletion(event as AgentEndEvent);
         this.resolveCompletion = null;
         this.rejectCompletion = null;
       }
+    }
+  }
+
+  private setIdleTimeout(reject: (reason: Error) => void): void {
+    if (this.idleTimeoutId) {
+      clearTimeout(this.idleTimeoutId);
+      this.idleTimeoutId = null;
+    }
+    if (this.idleTimeoutMs !== undefined && this.idleTimeoutMs > 0) {
+      this.idleTimeoutId = setTimeout(() => {
+        this.kill();
+        reject(new Error("Subagent execution timed out after inactivity"));
+      }, this.idleTimeoutMs);
     }
   }
 
@@ -258,10 +281,8 @@ export class PiRpcClient {
       }
 
       if (options.timeoutMs !== undefined && options.timeoutMs > 0) {
-        this.timeoutId = setTimeout(() => {
-          this.kill();
-          reject(new Error("Subagent execution timed out"));
-        }, options.timeoutMs);
+        this.idleTimeoutMs = options.timeoutMs;
+        this.setIdleTimeout(reject);
       }
 
       if (options.signal) {
@@ -297,10 +318,11 @@ export class PiRpcClient {
     this.eventListeners = [];
     this.accumulatedUsage = undefined;
 
-    if (this.timeoutId) {
-      clearTimeout(this.timeoutId);
-      this.timeoutId = null;
+    if (this.idleTimeoutId) {
+      clearTimeout(this.idleTimeoutId);
+      this.idleTimeoutId = null;
     }
+    this.idleTimeoutMs = undefined;
 
     this.proc.stdin?.end();
 
