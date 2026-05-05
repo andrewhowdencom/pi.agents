@@ -6,7 +6,7 @@ import type { AgentDefinition } from "./agent-discovery.js";
 import { discoverAgents, clearAgentCache } from "./agent-discovery.js";
 import { Type } from "typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
-import { executeSubagent } from "./subagent-tools.js";
+import { executeSubagent, type SubagentProgressEvent } from "./subagent-tools.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   type WorkflowStep,
@@ -1045,21 +1045,97 @@ export default function (pi: ExtensionAPI) {
         terminate?: boolean;
       }) => {
         onUpdate?.(partial);
-        if (ctx.hasUI) {
-          const details = partial.details as {
-            turnCount?: number;
-            maxTurns?: number;
-            usage?: { cost?: { total?: number } };
-          } | undefined;
-          const turn = details?.turnCount ?? 0;
-          const total = details?.maxTurns ?? maxTurns;
-          const totalText = total !== undefined ? `/${total}` : "";
-          const cost = details?.usage?.cost?.total ?? 0;
-          const costText = cost > 0 ? `, ~$${cost.toFixed(4)}` : "";
-          ctx.ui.setWorkingMessage(
-            `${agent.name}: turn ${turn}${totalText}${costText}`,
-          );
+      };
+
+      function formatToolArgs(toolName: string, args: Record<string, unknown>): string {
+        if (toolName === "bash" && typeof args.command === "string") {
+          const cmd = args.command;
+          return cmd.length > 30 ? `${cmd.slice(0, 30)}...` : cmd;
         }
+        if (typeof args.path === "string") {
+          return args.path;
+        }
+        if (typeof args.pattern === "string") {
+          return args.pattern;
+        }
+        return "";
+      }
+
+      const state = {
+        turnCount: 0,
+        currentTool: null as { toolName: string; argsText: string } | null,
+        lastDeltaTime: 0,
+        deltaPulse: 0,
+        startTime: Date.now(),
+        dirty: false,
+      };
+
+      let renderTimer: NodeJS.Timeout | null = null;
+
+      const render = () => {
+        if (!ctx.hasUI) return;
+        const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
+        const hasRecentDelta = Date.now() - state.lastDeltaTime < 2000;
+
+        let label: string;
+        if (state.currentTool) {
+          const argsText = state.currentTool.argsText;
+          label = argsText
+            ? `${state.currentTool.toolName}(${argsText})`
+            : state.currentTool.toolName;
+        } else if (hasRecentDelta) {
+          const dots = ".".repeat((state.deltaPulse % 3) + 1);
+          label = `reasoning${dots}`;
+        } else {
+          label = "waiting...";
+        }
+
+        const totalText = maxTurns !== undefined ? `/${maxTurns}` : "";
+        ctx.ui.setWorkingMessage(
+          `${agent.name}: turn ${state.turnCount}${totalText} • ${label} • ${elapsed}s`,
+        );
+      };
+
+      const scheduleRender = () => {
+        if (state.dirty) return;
+        state.dirty = true;
+        if (!renderTimer) {
+          renderTimer = setTimeout(() => {
+            renderTimer = null;
+            if (state.dirty) {
+              state.dirty = false;
+              render();
+            }
+          }, 200);
+        }
+      };
+
+      const onProgress = (event: SubagentProgressEvent) => {
+        switch (event.type) {
+          case "turn_start":
+            state.turnCount = event.turnCount;
+            state.currentTool = null;
+            break;
+          case "delta":
+            state.lastDeltaTime = Date.now();
+            state.deltaPulse++;
+            state.currentTool = null;
+            break;
+          case "tool_start":
+            state.currentTool = {
+              toolName: event.toolName,
+              argsText: formatToolArgs(event.toolName, event.args),
+            };
+            break;
+          case "tool_end":
+            state.currentTool = null;
+            break;
+          case "turn_end":
+            state.turnCount = event.turnCount;
+            state.currentTool = null;
+            break;
+        }
+        scheduleRender();
       };
 
       const result = await withDelegateDepth(() =>
@@ -1068,8 +1144,14 @@ export default function (pi: ExtensionAPI) {
           { goal: params.goal },
           signal,
           onDelegateUpdate,
+          onProgress,
         ),
       );
+
+      if (renderTimer) {
+        clearTimeout(renderTimer);
+        renderTimer = null;
+      }
 
       if (ctx.hasUI) {
         ctx.ui.setWorkingMessage();

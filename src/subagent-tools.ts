@@ -55,6 +55,15 @@ type SubagentUpdateCallback = (partial: {
   terminate?: boolean;
 }) => void;
 
+export type SubagentProgressEvent =
+  | { type: "agent_start" }
+  | { type: "turn_start"; turnCount: number }
+  | { type: "delta"; kind: "thinking" | "text" }
+  | { type: "tool_start"; toolName: string; args: Record<string, unknown> }
+  | { type: "tool_end"; toolName?: string }
+  | { type: "turn_end"; turnCount: number }
+  | { type: "agent_end" };
+
 /**
  * Execute a subagent via a separate Pi RPC process.
  *
@@ -67,6 +76,7 @@ export async function executeSubagent(
   params: Record<string, unknown>,
   signal: AbortSignal,
   onUpdate?: SubagentUpdateCallback,
+  onProgress?: (event: SubagentProgressEvent) => void,
 ): Promise<{ output: string; turnCount: number; timedOut: boolean; usage?: AccumulatedUsage }> {
   const effectiveTimeout = agent.timeout ?? DEFAULT_SUBAGENT_TIMEOUT;
   const maxTurns = agent.maxTurns;
@@ -106,6 +116,7 @@ export async function executeSubagent(
   let turnCount = 0;
 
   let unsubscribe: (() => void) | undefined;
+  let unsubscribeProgress: (() => void) | undefined;
 
   try {
     await client.start();
@@ -163,6 +174,50 @@ export async function executeSubagent(
       });
     }
 
+    if (onProgress) {
+      unsubscribeProgress = client.onEvent((event) => {
+        const eventType = event.type as string | undefined;
+        if (!eventType) return;
+
+        switch (eventType) {
+          case "agent_start":
+            onProgress({ type: "agent_start" });
+            break;
+          case "turn_start":
+            onProgress({ type: "turn_start", turnCount: client.getTurnCount() + 1 });
+            break;
+          case "message_update": {
+            const ame = event.assistantMessageEvent as Record<string, unknown> | undefined;
+            if (ame?.type === "thinking_delta") {
+              onProgress({ type: "delta", kind: "thinking" });
+            } else if (ame?.type === "text_delta") {
+              onProgress({ type: "delta", kind: "text" });
+            }
+            break;
+          }
+          case "tool_execution_start": {
+            const toolName = event.toolName as string | undefined;
+            const args = event.args as Record<string, unknown> | undefined;
+            if (toolName) {
+              onProgress({ type: "tool_start", toolName, args: args ?? {} });
+            }
+            break;
+          }
+          case "tool_execution_end": {
+            const toolName = event.toolName as string | undefined;
+            onProgress({ type: "tool_end", toolName });
+            break;
+          }
+          case "turn_end":
+            onProgress({ type: "turn_end", turnCount: client.getTurnCount() + 1 });
+            break;
+          case "agent_end":
+            onProgress({ type: "agent_end" });
+            break;
+        }
+      });
+    }
+
     const result = await client.waitForCompletion({
       signal,
       timeoutMs: effectiveTimeout,
@@ -211,6 +266,7 @@ export async function executeSubagent(
     }
   } finally {
     unsubscribe?.();
+    unsubscribeProgress?.();
     client.kill();
     await unlink(tempPath).catch(() => {});
   }
