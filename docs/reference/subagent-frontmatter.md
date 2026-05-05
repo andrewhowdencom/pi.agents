@@ -42,7 +42,7 @@ compatibility.
 |---|---|---|---|
 | `role` | string array | `["leader"]` | Capabilities of this agent: `"leader"` and/or `"delegate"` |
 | `model` | string | *(Pi default)* | LLM model for this delegate (e.g., `anthropic/claude-sonnet-4`, `openai/gpt-4.1`). Passed as `--model` to the delegate's RPC process. |
-| `timeout` | number | `60000` | RPC timeout in milliseconds. The delegate process is killed if it exceeds this. |
+| `timeout` | number | `60000` | RPC idle-timeout in milliseconds. The timer resets on each stdout event from the delegate. The delegate is killed only if it goes silent for longer than this duration. |
 | `max_turns` | number | `30` | Maximum turns before the delegate is forcibly stopped. |
 | `tool_name` | string | `invoke_{name}` | **Deprecated.** Unused with unified `delegate_agent` tool. |
 | `tool_schema` | array | — | **Deprecated.** Custom parameters are no longer supported; embed structured data in the `goal` string instead. |
