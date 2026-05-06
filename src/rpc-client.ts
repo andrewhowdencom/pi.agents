@@ -218,6 +218,28 @@ export class PiRpcClient {
         this.resolveCompletion = null;
         this.rejectCompletion = null;
       }
+    } else if (event.type === "extension_ui_request") {
+      const method = event.method as string | undefined;
+      const id = event.id as string | undefined;
+
+      // Dialog methods block until a response is sent. Auto-cancel them
+      // so the subagent does not hang forever.
+      if (
+        id &&
+        (method === "select" ||
+          method === "confirm" ||
+          method === "input" ||
+          method === "editor")
+      ) {
+        console.error(
+          `[pi-agents] Auto-cancelling extension UI request "${method}" (subagent UI is not supported)`,
+        );
+        this.sendCommand({
+          type: "extension_ui_response",
+          id,
+          cancelled: true,
+        });
+      }
     }
   }
 
