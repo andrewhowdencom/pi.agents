@@ -70,9 +70,7 @@ export default function (pi: ExtensionAPI) {
   function setActiveAgent(ctx: ExtensionContext, name: string | undefined) {
     activeAgentName = name;
     updateAgentStatus(ctx, name);
-    if (name) {
-      pi.appendEntry("agent-state", { name });
-    }
+    pi.appendEntry("agent-state", { name });
   }
 
   // --- CLI flags ---
@@ -106,7 +104,7 @@ export default function (pi: ExtensionAPI) {
       }
     }
 
-    if (latestAgentState) {
+    if (latestAgentState?.name) {
       activeAgentName = latestAgentState.name;
       updateAgentStatus(ctx, latestAgentState.name);
     } else {
@@ -388,6 +386,15 @@ export default function (pi: ExtensionAPI) {
 
       if (args.trim()) {
         const targetName = args.trim();
+        if (targetName === "none" || targetName === "clear") {
+          if (activeAgentName === undefined) {
+            ctx.ui.notify("Already using default system prompt", "info");
+            return;
+          }
+          setActiveAgent(ctx, undefined);
+          ctx.ui.notify("Agent cleared — using default system prompt", "info");
+          return;
+        }
         selectedAgent = agents.find((a) => a.name === targetName);
         if (!selectedAgent) {
           ctx.ui.notify(`Agent "${args.trim()}" not found`, "error");
@@ -396,9 +403,18 @@ export default function (pi: ExtensionAPI) {
       } else {
         const choice = await ctx.ui.select(
           "Select agent:",
-          agents.map((a) => a.name),
+          ["Default (no agent)", ...agents.map((a) => a.name)],
         );
         if (!choice) {
+          return;
+        }
+        if (choice === "Default (no agent)") {
+          if (activeAgentName === undefined) {
+            ctx.ui.notify("Already using default system prompt", "info");
+            return;
+          }
+          setActiveAgent(ctx, undefined);
+          ctx.ui.notify("Agent cleared — using default system prompt", "info");
           return;
         }
         selectedAgent = agents.find((a) => a.name === choice);
