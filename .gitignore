@@ -1,5 +1,8 @@
 # Plans directory
 .plans/
 
+# Pi harness state
+.pi/
+
 # Dependencies
 node_modules/
