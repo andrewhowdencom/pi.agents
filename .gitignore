@@ -1,2 +1,5 @@
 # Plans directory
 .plans/
+
+# Dependencies
+node_modules/
