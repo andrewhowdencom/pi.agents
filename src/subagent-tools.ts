@@ -62,7 +62,8 @@ export type SubagentProgressEvent =
   | { type: "tool_start"; toolName: string; args: Record<string, unknown> }
   | { type: "tool_end"; toolName?: string }
   | { type: "turn_end"; turnCount: number }
-  | { type: "agent_end" };
+  | { type: "agent_end" }
+  | { type: "error"; message: string };
 
 /**
  * Execute a subagent via a separate Pi RPC process.
@@ -214,6 +215,14 @@ export async function executeSubagent(
           case "agent_end":
             onProgress({ type: "agent_end" });
             break;
+          case "error": {
+            const message = event.message as string | undefined;
+            onProgress({
+              type: "error",
+              message: message ?? "Unknown RPC error",
+            });
+            break;
+          }
         }
       });
     }

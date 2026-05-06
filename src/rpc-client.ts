@@ -240,6 +240,24 @@ export class PiRpcClient {
           cancelled: true,
         });
       }
+    } else if (event.type === "error") {
+      if (this.idleTimeoutId) {
+        clearTimeout(this.idleTimeoutId);
+        this.idleTimeoutId = null;
+      }
+      this.idleTimeoutMs = undefined;
+
+      const msg = (event as Record<string, unknown>).message;
+      const errorMsg = typeof msg === "string" ? msg : "Unknown RPC error";
+
+      if (this.rejectCompletion) {
+        this.rejectCompletion(new Error(`Subagent RPC error: ${errorMsg}`));
+        this.rejectCompletion = null;
+        this.resolveCompletion = null;
+      }
+
+      this.kill();
+      return;
     }
   }
 

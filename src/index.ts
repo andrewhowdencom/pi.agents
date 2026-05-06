@@ -1134,6 +1134,9 @@ export default function (pi: ExtensionAPI) {
             state.turnCount = event.turnCount;
             state.currentTool = null;
             break;
+          case "error":
+            state.currentTool = null;
+            break;
         }
         scheduleRender();
       };
