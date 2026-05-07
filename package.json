@@ -4,10 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "clean": "echo 'nothing to clean'",
-    "build": "echo 'nothing to build'",
-    "check": "echo 'nothing to check'",
-    "test": "vitest run"
+    "clean": "echo 'nothing to clean'"
   },
   "dependencies": {
     "yaml": "^2.5.0"

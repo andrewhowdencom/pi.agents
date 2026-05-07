@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  GREETING: Hello, world!
+
+tasks:
+  default:
+    desc: Print a greeting message
+    cmds:
+      - echo "{{.GREETING}}"
+    silent: true
+
+  setup:
+    desc: Install required tools and dependencies
+    cmds:
+      - npm install
+
+  build:
+    desc: Build the application
+    cmds:
+      - echo 'nothing to build'
+
+  test:
+    desc: Run unit tests
+    cmds:
+      - npx vitest run
+
+  lint:
+    desc: Run code linters
+    cmds:
+      - echo 'nothing to lint'
+
+  validate:
+    desc: Run lints, unit tests, and the build before committing
+    deps:
+      - lint
+      - test
+      - build
